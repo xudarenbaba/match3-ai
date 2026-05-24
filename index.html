@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 消消乐</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1>AI 消消乐</h1>
+      <p class="subtitle">10×10 网格 · 点击「AI 出手」自动寻找最优交换</p>
+    </header>
+
+    <main class="main">
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>本局数据</h2>
+          <div class="stat">
+            <span>总分</span>
+            <strong id="score">0</strong>
+          </div>
+          <div class="stat">
+            <span>连锁分（累计）</span>
+            <strong id="chain-score">0</strong>
+          </div>
+          <div class="stat">
+            <span>步数</span>
+            <strong id="moves">0</strong>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>特殊积分</h2>
+          <p class="hint">仅 3 级合并计入；目标图形需各 ≥4 才通关</p>
+          <div id="special-panel" class="special-panel"></div>
+        </section>
+
+        <section class="panel actions">
+          <button type="button" id="btn-ai" class="btn btn-primary">AI 出手</button>
+          <button type="button" id="btn-new" class="btn btn-secondary">新一局</button>
+        </section>
+
+        <p id="status" class="status"></p>
+      </aside>
+
+      <div class="board-wrap">
+        <div id="grid" class="grid" role="grid" aria-label="游戏棋盘"></div>
+      </div>
+    </main>
+
+    <section class="log-panel">
+      <h2>操作日志</h2>
+      <div id="log" class="log"></div>
+    </section>
+
+    <footer class="footer">
+      <details>
+        <summary>规则摘要</summary>
+        <ul>
+          <li>交换相邻两格，仅当交换后立刻出现 ≥3 个同色同级连线才可合并。</li>
+          <li>1 级合并 → 落点升为 2 级，得分 = 参与格子数 ×1；2 级同理升为 3 级 ×2；3 级合并消除，得分 ×3 并 +1 该图形特殊分。</li>
+          <li>合并后下落补格，若再次触发合并则计入连锁分（已含在总分中）。</li>
+          <li>每局随机 2 种目标图形，二者特殊分均达 4 即通关。</li>
+        </ul>
+      </details>
+    </footer>
+  </div>
+
+  <script type="module" src="render.js"></script>
+</body>
+</html>
