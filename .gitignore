@@ -1,0 +1,41 @@
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境（conda 环境名 rlgame 在系统里，本地 venv 若创建则忽略）
+.venv/
+venv/
+env/
+
+# ── RL 训练产物（本地生成，体积大，可重新训练得到）────────
+rl_python/runs/**/checkpoints/
+rl_python/runs/**/tb/
+rl_python/runs/**/eval/
+# 保留 final_model.zip 和 best/
+
+# ── 日志与临时文件 ──────────────────────────────────────
+*.log
+*.tmp
+*.swp
+*~
+
+# ── 系统 / 编辑器 ───────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# ── 环境变量（若后续加入 API Key 等敏感配置）────────────
+.env
+.env.*

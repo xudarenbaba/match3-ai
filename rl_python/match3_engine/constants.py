@@ -1,0 +1,9 @@
+ROWS = 10
+COLS = 10
+SHAPES = ["circle", "square", "triangle", "star"]
+POWERUP_TYPES = ["column", "bomb", "color"]
+MAX_STEPS = 100
+INITIAL_FROZEN_RATIO = 0.12
+POWERUP_SPAWN_RATE = 0.025
+TASK_TARGET = 4
+MAX_ACTIONS = 180
