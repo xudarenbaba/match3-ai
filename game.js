@@ -1,20 +1,30 @@
 /**
- * 消消乐游戏引擎
- * 10x10 网格，4 种图形 × 3 个等级
+ * 消消乐游戏引擎（v2）
+ * - 10x10 网格，4 种图形 × 3 个等级
+ * - 固定步数（默认 100），允许无合并交换
+ * - 随机道具：列消 / 九宫格 / 全图同形消除
  */
 
 export const ROWS = 10;
 export const COLS = 10;
 export const SHAPES = ['circle', 'square', 'triangle', 'star'];
-export const SHAPE_NAMES = { circle: '圆形', square: '方块', triangle: '三角形', star: '五角星' };
+export const SHAPE_NAMES = {
+  circle: '圆形',
+  square: '方块',
+  triangle: '三角形',
+  star: '五角星',
+};
+export const POWERUP_TYPES = ['column', 'bomb', 'color'];
+export const MAX_STEPS = 100;
+export const INITIAL_FROZEN_RATIO = 0.12;
+export const POWERUP_SPAWN_RATE = 0.025;
 
-/** @typedef {{ shape: string, level: number }} Cell */
+/** @typedef {{ kind: 'normal', shape: string, level: number, frozen: boolean }} NormalCell */
+/** @typedef {{ kind: 'powerup', shape: string, powerupType: 'column'|'bomb'|'color', level: 3, frozen: boolean }} PowerCell */
+/** @typedef {NormalCell | PowerCell} Cell */
 /** @typedef {Cell | null} BoardCell */
 
-/**
- * @returns {import('./game.js').Cell}
- */
-export function createCell(shape = null, level = null) {
+export function createNormalCell(shape = null, level = null) {
   if (shape == null) {
     shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
   }
@@ -22,74 +32,93 @@ export function createCell(shape = null, level = null) {
     const r = Math.random();
     level = r < 0.6 ? 1 : r < 0.9 ? 2 : 3;
   }
-  return { shape, level };
+  return { kind: 'normal', shape, level, frozen: false };
+}
+
+export function createPowerupCell(shape = null, powerupType = null) {
+  if (shape == null) {
+    shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  }
+  if (powerupType == null) {
+    powerupType = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+  }
+  return { kind: 'powerup', shape, powerupType, level: 3, frozen: false };
 }
 
 /**
- * @returns {BoardCell[][]}
+ * 随机普通格子（小概率道具）
  */
+export function createCell() {
+  if (Math.random() < POWERUP_SPAWN_RATE) return createPowerupCell();
+  return createNormalCell();
+}
+
+export function isPowerup(cell) {
+  return Boolean(cell && cell.kind === 'powerup');
+}
+
+export function isFrozen(cell) {
+  return Boolean(cell && cell.frozen);
+}
+
 export function createEmptyBoard() {
   return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
 }
 
-/**
- * @param {BoardCell[][]} board
- */
 export function cloneBoard(board) {
   return board.map((row) => row.map((c) => (c ? { ...c } : null)));
 }
 
-/**
- * @param {BoardCell[][]} board
- * @param {number} r
- * @param {number} c
- */
 export function inBounds(r, c) {
   return r >= 0 && r < ROWS && c >= 0 && c < COLS;
 }
 
-/**
- * @param {BoardCell[][]} board
- */
-export function isBoardFull(board) {
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      if (!board[r][c]) return false;
-    }
-  }
-  return true;
+function cellKey(r, c) {
+  return `${r},${c}`;
+}
+
+function cellsEqual(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.shape === b.shape &&
+    a.level === b.level &&
+    Boolean(a.frozen) === Boolean(b.frozen) &&
+    (a.powerupType || '') === (b.powerupType || '')
+  );
 }
 
 /**
- * 检测所有可合并的连续段（横/竖 ≥3，同形状同等级）
- * @returns {{ cells: {r:number,c:number}[], shape: string, level: number }[]}
+ * 仅普通格参与合并：横/竖 >= 3，且同形状同等级
  */
 export function findMatches(board) {
   const matches = [];
-  const used = new Set();
-
-  const key = (r, c) => `${r},${c}`;
 
   // 横向
   for (let r = 0; r < ROWS; r++) {
     let c = 0;
     while (c < COLS) {
       const cell = board[r][c];
-      if (!cell) {
-        c++;
+      if (!cell || cell.kind !== 'normal' || cell.frozen) {
+        c += 1;
         continue;
       }
       let end = c + 1;
-      while (
-        end < COLS &&
-        board[r][end] &&
-        board[r][end].shape === cell.shape &&
-        board[r][end].level === cell.level
-      ) {
-        end++;
+      while (end < COLS) {
+        const next = board[r][end];
+        if (
+          !next ||
+          next.kind !== 'normal' ||
+          next.frozen ||
+          next.shape !== cell.shape ||
+          next.level !== cell.level
+        ) {
+          break;
+        }
+        end += 1;
       }
-      const len = end - c;
-      if (len >= 3) {
+      if (end - c >= 3) {
         const cells = [];
         for (let i = c; i < end; i++) cells.push({ r, c: i });
         matches.push({ cells, shape: cell.shape, level: cell.level });
@@ -103,21 +132,25 @@ export function findMatches(board) {
     let r = 0;
     while (r < ROWS) {
       const cell = board[r][c];
-      if (!cell) {
-        r++;
+      if (!cell || cell.kind !== 'normal' || cell.frozen) {
+        r += 1;
         continue;
       }
       let end = r + 1;
-      while (
-        end < ROWS &&
-        board[end][c] &&
-        board[end][c].shape === cell.shape &&
-        board[end][c].level === cell.level
-      ) {
-        end++;
+      while (end < ROWS) {
+        const next = board[end][c];
+        if (
+          !next ||
+          next.kind !== 'normal' ||
+          next.frozen ||
+          next.shape !== cell.shape ||
+          next.level !== cell.level
+        ) {
+          break;
+        }
+        end += 1;
       }
-      const len = end - r;
-      if (len >= 3) {
+      if (end - r >= 3) {
         const cells = [];
         for (let i = r; i < end; i++) cells.push({ r: i, c });
         matches.push({ cells, shape: cell.shape, level: cell.level });
@@ -126,98 +159,133 @@ export function findMatches(board) {
     }
   }
 
-  // 合并重叠的 match（十字交叉时按连通分量合并）
+  // 十字重叠合并
   if (matches.length <= 1) return matches;
-
-  const cellToMatches = new Map();
-  matches.forEach((m, idx) => {
-    m.cells.forEach(({ r, c }) => {
-      const k = key(r, c);
-      if (!cellToMatches.has(k)) cellToMatches.set(k, []);
-      cellToMatches.get(k).push(idx);
-    });
-  });
 
   const parent = matches.map((_, i) => i);
   const find = (x) => (parent[x] === x ? x : (parent[x] = find(parent[x])));
   const unite = (a, b) => {
     parent[find(a)] = find(b);
   };
+  const posToIndices = new Map();
 
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const list = cellToMatches.get(key(r, c));
-      if (list && list.length > 1) {
-        for (let i = 1; i < list.length; i++) unite(list[0], list[i]);
-      }
+  for (let i = 0; i < matches.length; i++) {
+    for (const p of matches[i].cells) {
+      const k = cellKey(p.r, p.c);
+      if (!posToIndices.has(k)) posToIndices.set(k, []);
+      posToIndices.get(k).push(i);
     }
+  }
+  for (const indices of posToIndices.values()) {
+    for (let i = 1; i < indices.length; i++) unite(indices[0], indices[i]);
   }
 
   const groups = new Map();
-  matches.forEach((m, idx) => {
-    const root = find(idx);
+  for (let i = 0; i < matches.length; i++) {
+    const root = find(i);
     if (!groups.has(root)) {
       groups.set(root, {
+        shape: matches[i].shape,
+        level: matches[i].level,
         cells: [],
-        shape: m.shape,
-        level: m.level,
       });
     }
     const g = groups.get(root);
-    m.cells.forEach((cell) => {
-      const k = key(cell.r, cell.c);
-      if (!used.has(k)) {
-        used.add(k);
-        g.cells.push(cell);
-      }
-    });
-  });
+    for (const p of matches[i].cells) {
+      if (!g.cells.some((x) => x.r === p.r && x.c === p.c)) g.cells.push(p);
+    }
+  }
 
   return Array.from(groups.values()).filter((g) => g.cells.length >= 3);
 }
 
-/**
- * 为每个 match 选择合并落点
- * @param {{ cells: {r:number,c:number}[], shape: string, level: number }[]} matches
- * @param {{r:number,c:number}|null} swapFrom
- * @param {{r:number,c:number}|null} swapTo
- */
-export function pickMergePositions(matches, swapFrom, swapTo) {
-  const swapCells = [];
-  if (swapFrom) swapCells.push(swapFrom);
-  if (swapTo) swapCells.push(swapTo);
-
-  return matches.map((m) => {
-    const cellSet = new Set(m.cells.map(({ r, c }) => `${r},${c}`));
-
-    // 优先落在 swapTo，其次 swapFrom
-    for (const pos of [swapTo, swapFrom]) {
-      if (pos && cellSet.has(`${pos.r},${pos.c}`)) return pos;
+function freezeRandomCells(board, ratio = INITIAL_FROZEN_RATIO) {
+  const positions = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      positions.push({ r, c });
     }
+  }
+  const total = Math.floor(ROWS * COLS * ratio);
+  for (let i = 0; i < positions.length; i++) {
+    const j = i + Math.floor(Math.random() * (positions.length - i));
+    const tmp = positions[i];
+    positions[i] = positions[j];
+    positions[j] = tmp;
+  }
+  for (let i = 0; i < total; i++) {
+    const { r, c } = positions[i];
+    if (board[r][c]) board[r][c].frozen = true;
+  }
+}
 
-    // 默认取 match 中最后一个格子（偏右/偏下）
+function buildMergeAdjacencySet(matches) {
+  const set = new Set();
+  const dirs = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  for (const m of matches) {
+    for (const p of m.cells) {
+      for (const [dr, dc] of dirs) {
+        const nr = p.r + dr;
+        const nc = p.c + dc;
+        if (inBounds(nr, nc)) set.add(cellKey(nr, nc));
+      }
+    }
+  }
+  return set;
+}
+
+function unfreezeAdjacentByMatches(board, matches) {
+  const adj = buildMergeAdjacencySet(matches);
+  const unfrozen = [];
+  adj.forEach((k) => {
+    const [r, c] = k.split(',').map(Number);
+    const cell = board[r][c];
+    if (cell && cell.frozen) {
+      cell.frozen = false;
+      unfrozen.push({ r, c });
+    }
+  });
+  return unfrozen;
+}
+
+function unfreezeTargets(board, targets) {
+  const out = [];
+  for (const p of targets) {
+    const cell = board[p.r][p.c];
+    if (cell && cell.frozen) {
+      cell.frozen = false;
+      out.push({ r: p.r, c: p.c });
+    }
+  }
+  return out;
+}
+
+export function pickMergePositions(matches, swapFrom, swapTo) {
+  return matches.map((m) => {
+    const cellSet = new Set(m.cells.map((p) => cellKey(p.r, p.c)));
+    for (const pos of [swapTo, swapFrom]) {
+      if (pos && cellSet.has(cellKey(pos.r, pos.c))) return pos;
+    }
     let best = m.cells[0];
-    for (const cell of m.cells) {
-      if (cell.r > best.r || (cell.r === best.r && cell.c > best.c)) best = cell;
+    for (const p of m.cells) {
+      if (p.r > best.r || (p.r === best.r && p.c > best.c)) best = p;
     }
     return best;
   });
 }
 
-/**
- * 执行一轮合并
- * @returns {{ score: number, specialGained: Record<string, number>, mergeEvents: object[] }}
- */
 export function applyMerges(board, matches, mergePositions) {
   let score = 0;
-  /** @type {Record<string, number>} */
   const specialGained = {};
   const mergeEvents = [];
-
-  // 同一格子可能属于多个 match 的并集，按 match 分别处理会冲突；
-  // 已用 pickMergePositions 按连通分量合并过
   const cleared = new Set();
-  const results = new Map(); // "r,c" -> { shape, level } | 'empty'
+  const results = new Map();
+  const unfrozenByAdjacency = unfreezeAdjacentByMatches(board, matches);
 
   matches.forEach((m, i) => {
     const pos = mergePositions[i];
@@ -225,44 +293,37 @@ export function applyMerges(board, matches, mergePositions) {
     const level = m.level;
 
     if (level === 1) {
-      score += n * 1;
-      results.set(`${pos.r},${pos.c}`, { shape: m.shape, level: 2 });
+      score += n;
+      results.set(cellKey(pos.r, pos.c), createNormalCell(m.shape, 2));
     } else if (level === 2) {
       score += n * 2;
-      results.set(`${pos.r},${pos.c}`, { shape: m.shape, level: 3 });
+      results.set(cellKey(pos.r, pos.c), createNormalCell(m.shape, 3));
     } else {
       score += n * 3;
       specialGained[m.shape] = (specialGained[m.shape] || 0) + 1;
-      results.set(`${pos.r},${pos.c}`, 'empty');
+      results.set(cellKey(pos.r, pos.c), null);
     }
 
-    m.cells.forEach(({ r, c }) => {
-      if (r === pos.r && c === pos.c) return;
-      cleared.add(`${r},${c}`);
+    m.cells.forEach((p) => {
+      if (p.r === pos.r && p.c === pos.c) return;
+      cleared.add(cellKey(p.r, p.c));
     });
 
     mergeEvents.push({ match: m, position: pos, level, count: n });
   });
 
-  // 先清空参与合并的非落点格
   cleared.forEach((k) => {
     const [r, c] = k.split(',').map(Number);
     board[r][c] = null;
   });
-
-  // 再设置落点
   results.forEach((val, k) => {
     const [r, c] = k.split(',').map(Number);
-    if (val === 'empty') board[r][c] = null;
-    else board[r][c] = val;
+    board[r][c] = val;
   });
 
-  return { score, specialGained, mergeEvents };
+  return { score, specialGained, mergeEvents, unfrozenByAdjacency };
 }
 
-/**
- * 重力下落 + 顶部随机补充
- */
 export function applyGravityAndRefill(board) {
   for (let c = 0; c < COLS; c++) {
     const stack = [];
@@ -276,53 +337,143 @@ export function applyGravityAndRefill(board) {
   }
 }
 
-/**
- * 交换两格（不验证）
- */
 export function swapCells(board, from, to) {
   const tmp = board[from.r][from.c];
   board[from.r][from.c] = board[to.r][to.c];
   board[to.r][to.c] = tmp;
 }
 
-/**
- * 完整解析：合并 → 下落 → 再检测，直到稳定
- * @returns {{
- *   totalScore: number,
- *   chainScore: number,
- *   specialGained: Record<string, number>,
- *   steps: object[],
- *   hadMatch: boolean
- * }}
- */
-export function resolveBoard(board, swapFrom = null, swapTo = null) {
-  let options = {};
-  if (
-    typeof swapFrom === 'object' &&
-    swapFrom &&
-    !('r' in swapFrom) &&
-    !('c' in swapFrom)
-  ) {
-    options = swapFrom;
-    swapFrom = null;
-    swapTo = null;
-  } else if (
-    typeof swapTo === 'object' &&
-    swapTo &&
-    !('r' in swapTo) &&
-    !('c' in swapTo)
-  ) {
-    options = swapTo;
-    swapTo = null;
-  } else if (arguments.length >= 4 && typeof arguments[3] === 'object') {
-    options = arguments[3] || {};
+function powerupTargets(board, powerPos, partnerPos) {
+  const powerCell = board[powerPos.r][powerPos.c];
+  const partnerCell = board[partnerPos.r][partnerPos.c];
+  const targets = new Set();
+
+  if (!powerCell || powerCell.kind !== 'powerup') return [];
+
+  if (powerCell.powerupType === 'column') {
+    for (let r = 0; r < ROWS; r++) targets.add(cellKey(r, powerPos.c));
+  } else if (powerCell.powerupType === 'bomb') {
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        // 炸弹以“交换后炸弹所在位置”为中心触发 3x3
+        const nr = powerPos.r + dr;
+        const nc = powerPos.c + dc;
+        if (inBounds(nr, nc)) targets.add(cellKey(nr, nc));
+      }
+    }
+  } else if (powerCell.powerupType === 'color') {
+    const targetShape = partnerCell?.shape;
+    if (targetShape) {
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (board[r][c]?.shape === targetShape) targets.add(cellKey(r, c));
+        }
+      }
+    }
   }
 
+  targets.add(cellKey(powerPos.r, powerPos.c));
+  return Array.from(targets).map((k) => {
+    const [r, c] = k.split(',').map(Number);
+    return { r, c };
+  });
+}
+
+function resolvePowerupSwap(board, from, to, captureBoards = false) {
+  const powerEvents = [];
+  const taskFromPowerup = {};
+  let totalScore = 0;
+  let chainScore = 0;
+  const steps = [];
+
+  const first = board[from.r][from.c];
+  const second = board[to.r][to.c];
+  const powerups = [];
+  if (isPowerup(first)) powerups.push({ pos: from, partner: to, cell: first });
+  if (isPowerup(second)) powerups.push({ pos: to, partner: from, cell: second });
+
+  if (powerups.length === 0) {
+    return {
+      usedPowerup: false,
+      totalScore: 0,
+      chainScore: 0,
+      specialGained: {},
+      taskFromPowerup,
+      steps,
+      hadMatch: false,
+    };
+  }
+
+  for (const pw of powerups) {
+    const targets = powerupTargets(board, pw.pos, pw.partner);
+    const unfrozen = unfreezeTargets(board, targets);
+    const removedCount = targets.length;
+    if (removedCount === 0) continue;
+
+    targets.forEach((p) => {
+      board[p.r][p.c] = null;
+    });
+    totalScore += removedCount;
+    if (removedCount >= 9) {
+      taskFromPowerup[pw.cell.shape] = (taskFromPowerup[pw.cell.shape] || 0) + 1;
+    }
+
+    powerEvents.push({
+      powerupType: pw.cell.powerupType,
+      shape: pw.cell.shape,
+      removedCount,
+      targets,
+      unfrozen,
+      triggerAt: pw.pos,
+    });
+  }
+
+  if (powerEvents.length === 0) {
+    return {
+      usedPowerup: false,
+      totalScore: 0,
+      chainScore: 0,
+      specialGained: {},
+      taskFromPowerup,
+      steps,
+      hadMatch: false,
+    };
+  }
+
+  steps.push({
+    type: 'powerup',
+    events: powerEvents,
+    score: powerEvents.reduce((acc, e) => acc + e.removedCount, 0),
+    boardAfterPowerup: captureBoards ? cloneBoard(board) : null,
+  });
+
+  applyGravityAndRefill(board);
+  steps.push({
+    type: 'refill',
+    boardAfterRefill: captureBoards ? cloneBoard(board) : null,
+  });
+
+  const chain = resolveBoard(board, from, to, { captureBoards });
+  totalScore += chain.totalScore;
+  chainScore += chain.totalScore;
+
+  steps.push(...chain.steps);
+  return {
+    usedPowerup: true,
+    totalScore,
+    chainScore,
+    specialGained: chain.specialGained,
+    taskFromPowerup,
+    steps,
+    hadMatch: chain.hadMatch || true,
+  };
+}
+
+export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}) {
   const captureBoards = Boolean(options.captureBoards);
   let totalScore = 0;
   let chainScore = 0;
   let isFirstMerge = true;
-  /** @type {Record<string, number>} */
   const specialGained = {};
   const steps = [];
   let hadMatch = false;
@@ -330,32 +481,27 @@ export function resolveBoard(board, swapFrom = null, swapTo = null) {
   while (true) {
     const matches = findMatches(board);
     if (matches.length === 0) break;
-
     hadMatch = true;
+
     const mergePositions = pickMergePositions(
       matches,
       isFirstMerge ? swapFrom : null,
       isFirstMerge ? swapTo : null
     );
+    const merged = applyMerges(board, matches, mergePositions);
+    totalScore += merged.score;
+    if (!isFirstMerge) chainScore += merged.score;
 
-    const { score, specialGained: sg, mergeEvents } = applyMerges(
-      board,
-      matches,
-      mergePositions
-    );
-
-    totalScore += score;
-    if (!isFirstMerge) chainScore += score;
-
-    Object.entries(sg).forEach(([shape, n]) => {
+    Object.entries(merged.specialGained).forEach(([shape, n]) => {
       specialGained[shape] = (specialGained[shape] || 0) + n;
     });
 
     steps.push({
       type: 'merge',
-      score,
-      mergeEvents,
-      specialGained: { ...sg },
+      score: merged.score,
+      mergeEvents: merged.mergeEvents,
+      specialGained: { ...merged.specialGained },
+      unfrozen: merged.unfrozenByAdjacency,
       boardAfterMerge: captureBoards ? cloneBoard(board) : null,
     });
     applyGravityAndRefill(board);
@@ -366,34 +512,31 @@ export function resolveBoard(board, swapFrom = null, swapTo = null) {
     isFirstMerge = false;
   }
 
+  return { totalScore, chainScore, specialGained, steps, hadMatch };
+}
+
+export function trySwap(board, from, to, options = {}) {
+  swapCells(board, from, to);
+  const afterSwapBoard = options.captureBoards ? cloneBoard(board) : null;
+
+  const powerRes = resolvePowerupSwap(board, from, to, options.captureBoards);
+  if (powerRes.usedPowerup) {
+    return {
+      success: true,
+      afterSwapBoard,
+      ...powerRes,
+    };
+  }
+
+  const normalRes = resolveBoard(board, from, to, options);
   return {
-    totalScore,
-    chainScore,
-    specialGained,
-    steps,
-    hadMatch,
+    success: true,
+    afterSwapBoard,
+    taskFromPowerup: {},
+    ...normalRes,
   };
 }
 
-/**
- * 尝试交换并解析；无效则还原
- */
-export function trySwap(board, from, to) {
-  let options = {};
-  if (arguments.length >= 4 && typeof arguments[3] === 'object') {
-    options = arguments[3] || {};
-  }
-  swapCells(board, from, to);
-  const afterSwapBoard = options.captureBoards ? cloneBoard(board) : null;
-  const result = resolveBoard(board, from, to, options);
-  if (!result.hadMatch) {
-    swapCells(board, from, to);
-    return { success: false, afterSwapBoard, ...result };
-  }
-  return { success: true, afterSwapBoard, ...result };
-}
-
-/** 相邻四方向 */
 const DIRS = [
   [0, 1],
   [0, -1],
@@ -401,13 +544,9 @@ const DIRS = [
   [-1, 0],
 ];
 
-/**
- * 获取所有能通过交换触发合并的相邻对
- */
-export function getValidSwaps(board) {
+export function getAdjacentSwaps(board) {
   const swaps = [];
   const seen = new Set();
-
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       if (!board[r][c]) continue;
@@ -421,79 +560,30 @@ export function getValidSwaps(board) {
             : `${nr},${nc}-${r},${c}`;
         if (seen.has(key)) continue;
         seen.add(key);
-
-        const sim = cloneBoard(board);
-        const from = { r, c };
-        const to = { r: nr, c: nc };
-        const res = trySwap(sim, from, to);
-        if (res.success) swaps.push({ from, to, preview: res });
+        swaps.push({ from: { r, c }, to: { r: nr, c: nc } });
       }
     }
   }
   return swaps;
 }
 
-/**
- * 模拟交换（不修改原棋盘）
- */
-export function simulateSwap(board, from, to) {
-  let options = {};
-  if (arguments.length >= 4 && typeof arguments[3] === 'object') {
-    options = arguments[3] || {};
-  }
+export function simulateSwap(board, from, to, options = {}) {
   const sim = cloneBoard(board);
   const result = trySwap(sim, from, to, options);
-  if (result.success && options.includeFinalBoard) {
+  if (options.includeFinalBoard) {
     return { ...result, finalBoard: cloneBoard(sim) };
   }
   return result;
 }
 
-/**
- * 洗牌：重新填充，保证至少一个合法交换
- */
 export function reshuffleBoard(board, maxAttempts = 200) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        board[r][c] = createCell();
-      }
+      for (let c = 0; c < COLS; c++) board[r][c] = createCell();
     }
-    // 消除初始就存在的三连（简单重抽该格）
-    let matches = findMatches(board);
-    let guard = 0;
-    while (matches.length > 0 && guard++ < 500) {
-      matches.forEach((m) => {
-        m.cells.forEach(({ r, c }) => {
-          board[r][c] = createCell();
-        });
-      });
-      matches = findMatches(board);
-    }
-    if (getValidSwaps(board).length > 0) return true;
+    if (findMatches(board).length === 0) return true;
   }
   return false;
-}
-
-/**
- * 游戏状态
- */
-export function createGameState() {
-  const targetShapes = pickTwoShapes();
-  const board = createEmptyBoard();
-  reshuffleBoard(board);
-
-  return {
-    board,
-    score: 0,
-    chainScoreTotal: 0,
-    specialScores: Object.fromEntries(SHAPES.map((s) => [s, 0])),
-    targetShapes,
-    moves: 0,
-    won: false,
-    lost: false,
-    history: [],
-  };
 }
 
 export function pickTwoShapes() {
@@ -503,58 +593,85 @@ export function pickTwoShapes() {
   return [a, b];
 }
 
-/**
- * @param {ReturnType<typeof createGameState>} state
- */
-export function checkVictory(state) {
-  return state.targetShapes.every((s) => (state.specialScores[s] || 0) >= 4);
+export function createGameState() {
+  const targetShapes = pickTwoShapes();
+  const board = createEmptyBoard();
+  reshuffleBoard(board);
+  freezeRandomCells(board, INITIAL_FROZEN_RATIO);
+  return {
+    board,
+    score: 0,
+    chainScoreTotal: 0,
+    taskScores: Object.fromEntries(SHAPES.map((s) => [s, 0])),
+    targetShapes,
+    totalSteps: MAX_STEPS,
+    stepsUsed: 0,
+    won: false,
+    over: false,
+    history: [],
+  };
 }
 
-/**
- * 执行一步 AI/玩家交换
- */
+function applyTaskProgress(state, result) {
+  Object.entries(result.specialGained || {}).forEach(([shape, n]) => {
+    state.taskScores[shape] = (state.taskScores[shape] || 0) + n;
+  });
+  Object.entries(result.taskFromPowerup || {}).forEach(([shape, n]) => {
+    state.taskScores[shape] = (state.taskScores[shape] || 0) + n;
+  });
+}
+
+export function checkVictory(state) {
+  return state.targetShapes.every((s) => (state.taskScores[s] || 0) >= 4);
+}
+
 export function executeMove(state, from, to) {
+  if (state.over) return { ok: false, reason: '本局已结束' };
   const result = trySwap(state.board, from, to);
-  if (!result.success) return { ok: false, reason: '无效交换' };
 
   state.score += result.totalScore;
   state.chainScoreTotal += result.chainScore;
-  Object.entries(result.specialGained).forEach(([shape, n]) => {
-    state.specialScores[shape] = (state.specialScores[shape] || 0) + n;
-  });
-  state.moves += 1;
+  applyTaskProgress(state, result);
+  state.stepsUsed += 1;
   state.history.push({ from, to, ...result });
 
   if (checkVictory(state)) {
     state.won = true;
-  } else if (getValidSwaps(state.board).length === 0) {
-    reshuffleBoard(state.board);
+    state.over = true;
+  } else if (state.stepsUsed >= state.totalSteps) {
+    state.over = true;
   }
 
   return { ok: true, result };
 }
 
-/**
- * 使用“已预演结果”结算（用于动画后提交，保证展示与最终结果一致）
- */
 export function commitPreparedMove(state, from, to, preparedResult, finalBoard) {
-  if (!preparedResult?.success) return { ok: false, reason: '无效交换' };
-  if (!finalBoard) return { ok: false, reason: '缺少最终棋盘' };
+  if (!preparedResult || !finalBoard) return { ok: false, reason: '预演数据不完整' };
+  if (state.over) return { ok: false, reason: '本局已结束' };
 
   state.board = cloneBoard(finalBoard);
   state.score += preparedResult.totalScore;
   state.chainScoreTotal += preparedResult.chainScore;
-  Object.entries(preparedResult.specialGained).forEach(([shape, n]) => {
-    state.specialScores[shape] = (state.specialScores[shape] || 0) + n;
-  });
-  state.moves += 1;
+  applyTaskProgress(state, preparedResult);
+  state.stepsUsed += 1;
   state.history.push({ from, to, ...preparedResult });
 
   if (checkVictory(state)) {
     state.won = true;
-  } else if (getValidSwaps(state.board).length === 0) {
-    reshuffleBoard(state.board);
+    state.over = true;
+  } else if (state.stepsUsed >= state.totalSteps) {
+    state.over = true;
   }
 
   return { ok: true, result: preparedResult };
+}
+
+export function boardDiffChangedCells(prevBoard, nextBoard) {
+  const changed = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (!cellsEqual(prevBoard[r][c], nextBoard[r][c])) changed.push({ r, c });
+    }
+  }
+  return changed;
 }
