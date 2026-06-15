@@ -22,9 +22,9 @@
 
 ### 1) 安装依赖（一次）
 
-```powershell
+```bash
 conda activate rlgame
-cd D:\otherwise\AI_best\rl_python
+cd rl_python
 pip install -r requirements.txt
 ```
 
@@ -32,14 +32,14 @@ pip install -r requirements.txt
 
 默认输出到 `rl_python/runs/ppo_match3/`：
 
-```powershell
-cd D:\otherwise\AI_best\rl_python
+```bash
+cd rl_python
 python train/train_ppo.py --curriculum 3 --timesteps 500000 --n-envs 8
 ```
 
 指定保存目录（推荐用于多轮实验，如 `ppo_match3_v2`）：
 
-```powershell
+```bash
 python train/train_ppo.py --curriculum 3 --timesteps 800000 --n-envs 8 --save-dir runs/ppo_match3_v2
 ```
 
@@ -53,20 +53,20 @@ python train/train_ppo.py --curriculum 3 --timesteps 800000 --n-envs 8 --save-di
 | `--save-dir` | `runs/ppo_match3` | 模型、checkpoint、TensorBoard 日志目录 |
 | `--seed` | `42` | 随机种子 |
 
-训练产物（已在 `.gitignore` 中忽略，不提交 Git）：
+训练产物说明：
 
 ```text
 runs/<实验名>/
-├─ checkpoints/     # 每 1 万步中间模型
-├─ best/            # 评估最优模型 best_model.zip
-├─ eval/            # 评估日志 evaluations.npz
-├─ tb/              # TensorBoard 事件文件
-└─ final_model.zip  # 训练结束最终模型
+├─ checkpoints/     # 每 1 万步中间模型（gitignored）
+├─ best/            # 评估最优模型 best_model.zip（已提交 git）
+├─ eval/            # 评估日志 evaluations.npz（gitignored）
+├─ tb/              # TensorBoard 事件文件（gitignored）
+└─ final_model.zip  # 训练结束最终模型（已提交 git）
 ```
 
 查看训练曲线：
 
-```powershell
+```bash
 tensorboard --logdir runs/ppo_match3_v2/tb
 ```
 
@@ -74,27 +74,27 @@ tensorboard --logdir runs/ppo_match3_v2/tb
 
 使用最终模型（路径可带或不带 `.zip`）：
 
-```powershell
+```bash
 conda activate rlgame
-cd D:\otherwise\AI_best\rl_python
+cd rl_python
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model
 ```
 
 使用评估最优模型：
 
-```powershell
+```bash
 python serve/predict_server.py --model runs/ppo_match3_v2/best/best_model
 ```
 
 非确定性模式（更不容易重复动作，推荐对局时使用）：
 
-```powershell
+```bash
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model --stochastic
 ```
 
 自定义端口：
 
-```powershell
+```bash
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model --host 127.0.0.1 --port 8765
 ```
 
@@ -107,8 +107,8 @@ API：
 
 ### 4) 启动前端游戏
 
-```powershell
-cd D:\otherwise\AI_best
+```bash
+# 从仓库根目录运行
 python -m http.server 8080
 ```
 
@@ -184,7 +184,7 @@ python -m http.server 8080
 ## 四、项目目录与文件职责
 
 ```text
-AI_best/
+match3-ai/
 ├─ index.html                         # 前端入口：棋盘 UI、侧边栏统计、RL/新局按钮
 ├─ style.css                          # 页面样式（布局、棋盘格、按钮、日志面板）
 ├─ README.md                          # 项目说明文档
@@ -237,8 +237,8 @@ AI_best/
    ├─ tests/
    │  ├─ test_engine.py               # 引擎与环境冒烟测试（步进、观测形状）
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
-   └─ runs/                           # 训练产物（本地生成，已被 .gitignore 忽略）
-      └─ ppo_match3_v2/               # 示例实验目录
+   └─ runs/                           # 训练产物（部分已提交 git，见下方说明）
+       └─ ppo_match3_v2/               # 示例实验目录（final_model.zip 和 best/ 已提交）
 ```
 
 ## 五、训练与推理链路
@@ -261,10 +261,8 @@ AI_best/
 
 ## 六、评估模型
 
-```powershell
-cd D:\otherwise\AI_best\rl_python
-
-# 评估训练好的模型
+```bash
+# 在 rl_python/ 目录下运行
 python train/eval.py --model runs/ppo_match3_v2/final_model --curriculum 3 --episodes 100
 
 # 随机策略基线（不传 --model）
@@ -281,13 +279,13 @@ python train/eval.py --curriculum 3 --episodes 100
 
 ## 七、运行测试
 
-```powershell
-cd D:\otherwise\AI_best\rl_python
+```bash
+# 在 rl_python/ 目录下运行
 python -m pytest tests/test_engine.py -v
 ```
 
 手动验证模型可加载（需本地已有对应模型文件）：
 
-```powershell
+```bash
 python tests/test_predict_load.py
 ```
