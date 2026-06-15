@@ -5,7 +5,7 @@ import numpy as np
 from match3_engine.constants import ROWS, COLS, SHAPES, POWERUP_TYPES
 from match3_engine.game import GameState
 
-BOARD_CHANNELS = 20
+BOARD_CHANNELS = 28
 GLOBAL_DIM = 15
 
 
@@ -27,9 +27,13 @@ def build_observation(state: GameState) -> dict:
                 board[12 + pi, r, c] = 1.0
             if cell.frozen:
                 board[15, r, c] = 1.0
-            si = SHAPES.index(cell.shape)
             if cell.shape in target_set:
-                board[16 + si, r, c] = 1.0
+                si = SHAPES.index(cell.shape)
+                if cell.kind == "normal" and 1 <= cell.level <= 3:
+                    board[16 + si * 3 + (cell.level - 1), r, c] = 1.0
+                elif cell.kind == "powerup":
+                    # 道具格视为最高进度，标记到 L3 通道
+                    board[16 + si * 3 + 2, r, c] = 1.0
 
     steps_left = max(0, state.total_steps - state.steps_used)
     global_vec = np.zeros(GLOBAL_DIM, dtype=np.float32)

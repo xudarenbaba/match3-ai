@@ -7,7 +7,7 @@
 ## 一、核心特性
 
 - **MaskablePPO 强化学习**：动作空间 180 维（90 横向 + 90 纵向相邻交换）
-- **多输入观测**：`board` 20 通道 × 10×10 棋盘 + `global` 15 维全局向量
+- **多输入观测**：`board` 28 通道 × 10×10 棋盘 + `global` 15 维全局向量
 - **本地推理服务**：浏览器每回合请求 Python 服务获取 RL 推荐走法
 - **课程学习**：难度 1–3 逐步增加步数限制、任务目标与冻结格
 - **训练防抖**：
@@ -124,7 +124,7 @@ python -m http.server 8080
 
 | 字段 | 形状 | 取值范围 | 说明 |
 |------|------|----------|------|
-| `board` | `(20, 10, 10)` | `[0, 1]` | 棋盘空间特征，每格多通道 one-hot / 标志位 |
+| `board` | `(28, 10, 10)` | `[0, 1]` | 棋盘空间特征，每格多通道 one-hot / 标志位 |
 | `global` | `(15,)` | `[0, 1]` | 全局标量特征（步数、分数、任务进度等） |
 
 对应代码：`rl_python/env/observation.py`、`src/rl/observation.js`。
@@ -143,10 +143,18 @@ python -m http.server 8080
 | 13 | `powerup_bomb` | 九宫格炸弹道具格 |
 | 14 | `powerup_color` | 同形全消道具格 |
 | 15 | `frozen` | 该格被冻结（不可交换） |
-| 16 | `target_circle` | 该格图形属于本局目标图形（circle） |
-| 17 | `target_square` | 目标图形标志（square） |
-| 18 | `target_triangle` | 目标图形标志（triangle） |
-| 19 | `target_star` | 目标图形标志（star） |
+| 16 | `target_circle_L1` | 目标圆形，等级 1 |
+| 17 | `target_circle_L2` | 目标圆形，等级 2 |
+| 18 | `target_circle_L3` | 目标圆形，等级 3（含道具格） |
+| 19 | `target_square_L1` | 目标方形，等级 1 |
+| 20 | `target_square_L2` | 目标方形，等级 2 |
+| 21 | `target_square_L3` | 目标方形，等级 3（含道具格） |
+| 22 | `target_triangle_L1` | 目标三角形，等级 1 |
+| 23 | `target_triangle_L2` | 目标三角形，等级 2 |
+| 24 | `target_triangle_L3` | 目标三角形，等级 3（含道具格） |
+| 25 | `target_star_L1` | 目标星形，等级 1 |
+| 26 | `target_star_L2` | 目标星形，等级 2 |
+| 27 | `target_star_L3` | 目标星形，等级 3（含道具格） |
 
 空位（`null`）不激活任何通道。
 

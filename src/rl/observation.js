@@ -1,6 +1,6 @@
 import { ROWS, COLS, SHAPES, POWERUP_TYPES } from '../core/constants.js';
 
-const BOARD_CHANNELS = 20;
+const BOARD_CHANNELS = 28;
 const GLOBAL_DIM = 15;
 
 export const OBS_BOARD_CHANNELS = BOARD_CHANNELS;
@@ -32,9 +32,16 @@ export function buildObservation(state) {
         board[15 * ROWS * COLS + base] = 1;
       }
 
-      const shapeIdx = SHAPES.indexOf(cell.shape);
-      if (shapeIdx >= 0 && targetSet.has(cell.shape)) {
-        board[(16 + shapeIdx) * ROWS * COLS + base] = 1;
+      if (targetSet.has(cell.shape)) {
+        const si = SHAPES.indexOf(cell.shape);
+        if (si >= 0) {
+          if (cell.kind === 'normal' && cell.level >= 1 && cell.level <= 3) {
+            board[(16 + si * 3 + (cell.level - 1)) * ROWS * COLS + base] = 1;
+          } else if (cell.kind === 'powerup') {
+            // 道具格视为最高进度，标记到 L3 通道
+            board[(16 + si * 3 + 2) * ROWS * COLS + base] = 1;
+          }
+        }
       }
     }
   }
