@@ -10,12 +10,12 @@ from gymnasium import spaces
 from match3_engine.actions import build_action_mask, swap_from_action, decode_action
 from match3_engine.constants import MAX_ACTIONS, MAX_STEPS, TASK_TARGET, SHAPES, ROWS
 from match3_engine.game import create_game_state, execute_move, snapshot_state
-from env.observation import build_observation, BOARD_CHANNELS, GLOBAL_DIM
+from env.observation import build_observation, stack_observations, STACKED_BOARD_CHANNELS, GLOBAL_DIM
 from env.reward import compute_reward
 
 
 class Match3Env(gym.Env):
-    """消消乐 Gymnasium 环境，支持课程学习。"""
+    """消消乐 Gymnasium 环境，支持课程学习与帧堆叠。"""
 
     metadata = {"render_modes": ["human"]}
 
@@ -24,10 +24,11 @@ class Match3Env(gym.Env):
         self.curriculum_level = curriculum_level
         self._rng = random.Random(seed)
         self.state = None
+        self._frame_buffer: list[dict] = []  # 存储最近 FRAME_STACK 帧的单帧 obs
 
         self.observation_space = spaces.Dict(
             {
-                "board": spaces.Box(0.0, 1.0, shape=(BOARD_CHANNELS, ROWS, ROWS), dtype=np.float32),
+                "board": spaces.Box(0.0, 1.0, shape=(STACKED_BOARD_CHANNELS, ROWS, ROWS), dtype=np.float32),
                 "global": spaces.Box(0.0, 1.0, shape=(GLOBAL_DIM,), dtype=np.float32),
             }
         )
@@ -58,7 +59,10 @@ class Match3Env(gym.Env):
             task_target=opts["task_target"],
             freeze=opts["freeze"],
         )
-        obs = build_observation(self.state)
+        # 重置帧缓冲：用当前帧填满（冷启动时全部是同一帧）
+        frame = build_observation(self.state)
+        self._frame_buffer = [frame]
+        obs = stack_observations(self._frame_buffer)
         mask = build_action_mask(self.state.board)
         return obs, {"action_mask": mask}
 
@@ -69,12 +73,12 @@ class Match3Env(gym.Env):
             mask = build_action_mask(self.state.board)
             valid_idx = np.where(mask > 0)[0]
             if len(valid_idx) == 0:
-                obs = build_observation(self.state)
+                obs = stack_observations(self._frame_buffer)
                 return obs, -1.0, True, False, {"action_mask": mask, "invalid": True}
             action = int(valid_idx[0])
             swap = decode_action(action)
             if swap is None:
-                obs = build_observation(self.state)
+                obs = stack_observations(self._frame_buffer)
                 return obs, -1.0, True, False, {"action_mask": mask, "invalid": True}
 
         move = execute_move(self.state, self._rng, swap["from"], swap["to"])
@@ -82,7 +86,10 @@ class Match3Env(gym.Env):
         result["action_index"] = int(action)
         reward = compute_reward(prev, result, self.state)
 
-        obs = build_observation(self.state)
+        # 将新帧压入帧缓冲
+        frame = build_observation(self.state)
+        self._frame_buffer.append(frame)
+        obs = stack_observations(self._frame_buffer)
         mask = build_action_mask(self.state.board)
         info = {
             "action_mask": mask,

@@ -5,11 +5,17 @@ import numpy as np
 from match3_engine.constants import ROWS, COLS, SHAPES, POWERUP_TYPES
 from match3_engine.game import GameState
 
+# 单帧 board 通道数
 BOARD_CHANNELS = 28
+# 帧堆叠数（当前帧 + 前 N-1 帧）
+FRAME_STACK = 3
+# 堆叠后送入网络的 board 通道数
+STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK  # 84
 GLOBAL_DIM = 15
 
 
 def build_observation(state: GameState) -> dict:
+    """构建单帧观测，board shape=(28,10,10)，global shape=(15,)。"""
     board = np.zeros((BOARD_CHANNELS, ROWS, COLS), dtype=np.float32)
     target_set = set(state.target_shapes)
 
@@ -50,3 +56,19 @@ def build_observation(state: GameState) -> dict:
     global_vec[14] = (state.last_action + 1) / 180.0
 
     return {"board": board, "global": global_vec}
+
+
+def stack_observations(frames: list[dict]) -> dict:
+    """将多帧单帧观测堆叠为网络输入。
+
+    frames: 长度为 FRAME_STACK 的列表，index 0 为最旧帧，index -1 为最新帧。
+    若历史帧不足，用零帧补齐最旧位置。
+    返回 board shape=(84,10,10)，global 取最新帧的 (15,)。
+    """
+    # 补齐历史帧
+    while len(frames) < FRAME_STACK:
+        frames = [{"board": np.zeros((BOARD_CHANNELS, ROWS, COLS), dtype=np.float32),
+                   "global": np.zeros(GLOBAL_DIM, dtype=np.float32)}] + frames
+    frames = frames[-FRAME_STACK:]
+    stacked_board = np.concatenate([f["board"] for f in frames], axis=0)  # (84,10,10)
+    return {"board": stacked_board, "global": frames[-1]["global"]}

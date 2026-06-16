@@ -15,7 +15,7 @@ import {
   isPowerup,
   isFrozen,
 } from '../core/index.js';
-import { checkRlServer, findRlMove } from '../ai/rl-policy.js';
+import { checkRlServer, findRlMove, resetFrameHistory } from '../ai/rl-policy.js';
 
 const gridEl = () => document.getElementById('grid');
 const scoreEl = () => document.getElementById('score');
@@ -59,6 +59,7 @@ function bindEvents() {
   btnAi()?.addEventListener('click', onAiMove);
   btnNew()?.addEventListener('click', () => {
     state = createGameState();
+    resetFrameHistory();
     log('新一局开始');
     renderAll();
   });

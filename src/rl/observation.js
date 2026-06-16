@@ -1,13 +1,23 @@
 import { ROWS, COLS, SHAPES, POWERUP_TYPES } from '../core/constants.js';
 
+// 单帧 board 通道数
 const BOARD_CHANNELS = 28;
+// 帧堆叠数，与 Python 侧 FRAME_STACK 保持一致
+export const FRAME_STACK = 3;
+// 堆叠后的 board 通道数
+export const STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK; // 84
 const GLOBAL_DIM = 15;
 
-export const OBS_BOARD_CHANNELS = BOARD_CHANNELS;
+export const OBS_BOARD_CHANNELS = STACKED_BOARD_CHANNELS;
 export const OBS_GLOBAL_DIM = GLOBAL_DIM;
 
+/**
+ * 构建单帧棋盘观测，返回普通 Array（便于 JSON 序列化传给推理服务）。
+ * board: 长度 BOARD_CHANNELS*ROWS*COLS 的数组
+ * global: 长度 GLOBAL_DIM 的数组
+ */
 export function buildObservation(state) {
-  const board = new Float32Array(BOARD_CHANNELS * ROWS * COLS);
+  const board = new Array(BOARD_CHANNELS * ROWS * COLS).fill(0);
   const targetSet = new Set(state.targetShapes);
 
   for (let r = 0; r < ROWS; r++) {
@@ -47,7 +57,7 @@ export function buildObservation(state) {
   }
 
   const stepsLeft = Math.max(0, state.totalSteps - state.stepsUsed);
-  const global = new Float32Array(GLOBAL_DIM);
+  const global = new Array(GLOBAL_DIM).fill(0);
   global[0] = state.stepsUsed / state.totalSteps;
   global[1] = stepsLeft / state.totalSteps;
   global[2] = Math.min(1, state.score / 5000);
@@ -57,7 +67,7 @@ export function buildObservation(state) {
     global[8 + i] = targetSet.has(shape) ? 1 : 0;
   });
   const targetProgress = state.targetShapes.map((s) => (state.taskScores[s] || 0) / 4);
-  global[12] = Math.min(...targetProgress);
+  global[12] = targetProgress.length > 0 ? Math.min(...targetProgress) : 0;
   global[13] = state.won ? 1 : 0;
   global[14] = ((state.lastAction ?? -1) + 1) / 180;
 

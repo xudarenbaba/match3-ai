@@ -16,7 +16,7 @@ if ROOT not in sys.path:
 import numpy as np
 from sb3_contrib import MaskablePPO
 
-from env.observation import build_observation
+from env.observation import build_observation, stack_observations, BOARD_CHANNELS, ROWS, GLOBAL_DIM
 from match3_engine.actions import build_action_mask, decode_action
 from serve.state_codec import json_to_game_state
 
@@ -63,7 +63,22 @@ class PredictHandler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(length))
             state = json_to_game_state(payload)
-            obs = build_observation(state)
+
+            # 从前端传来的 frameHistory 重建帧堆叠 obs
+            frame_history_raw = payload.get("frameHistory", [])
+            frames = []
+            for fh in frame_history_raw:
+                board_flat = fh.get("board", [])
+                global_flat = fh.get("global", [])
+                board_arr = np.array(board_flat, dtype=np.float32).reshape(BOARD_CHANNELS, ROWS, ROWS)
+                global_arr = np.array(global_flat, dtype=np.float32).reshape(GLOBAL_DIM)
+                frames.append({"board": board_arr, "global": global_arr})
+
+            # 若前端没有传历史（兼容旧版），退化为单帧重复堆叠
+            if not frames:
+                frames = [build_observation(state)]
+
+            obs = stack_observations(frames)
             mask = build_action_mask(state.board)
             action, _ = MODEL.predict(obs, action_masks=mask.astype(bool), deterministic=not NON_DETERMINISTIC)
             action = int(action)
@@ -74,12 +89,6 @@ class PredictHandler(BaseHTTPRequestHandler):
                     self._json_response(400, {"error": "no valid actions"})
                     return
                 action = int(valid[0])
-
-            if state.last_action >= 0 and action == state.last_action:
-                valid = np.where(mask > 0)[0]
-                alternatives = [int(a) for a in valid if int(a) != state.last_action]
-                if alternatives:
-                    action = int(alternatives[0])
 
             swap = decode_action(action)
             if swap is None:
