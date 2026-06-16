@@ -24,6 +24,7 @@ def resolve_board(
     chain_score = 0
     is_first = True
     special_gained: dict = {}
+    cleared_by_shape: dict = {}
     had_match = False
 
     while True:
@@ -42,6 +43,8 @@ def resolve_board(
             chain_score += merged["score"]
         for shape, n in merged["special_gained"].items():
             special_gained[shape] = special_gained.get(shape, 0) + n
+        for shape, n in merged["cleared_by_shape"].items():
+            cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + n
         apply_gravity_and_refill(board, rng)
         is_first = False
 
@@ -49,6 +52,7 @@ def resolve_board(
         "total_score": total_score,
         "chain_score": chain_score,
         "special_gained": special_gained,
+        "cleared_by_shape": cleared_by_shape,
         "had_match": had_match,
         "used_powerup": False,
         "task_from_powerup": {},
@@ -108,6 +112,7 @@ def _resolve_powerup_swap(board: Board, rng: random.Random, fr: dict, to: dict) 
         "total_score": total_score,
         "chain_score": chain["total_score"],
         "special_gained": chain["special_gained"],
+        "cleared_by_shape": chain["cleared_by_shape"],
         "had_match": chain["had_match"] or True,
         "used_powerup": True,
         "task_from_powerup": task_from_powerup,

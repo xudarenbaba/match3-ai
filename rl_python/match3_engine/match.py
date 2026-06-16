@@ -133,6 +133,7 @@ def pick_merge_positions(matches: List[dict], swap_from: Optional[dict], swap_to
 def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict], rng: random.Random) -> dict:
     score = 0
     special_gained: Dict[str, int] = {}
+    cleared_by_shape: Dict[str, int] = {}  # 每种 shape 本轮被消除（清空）的格子数
     cleared = set()
     results: Dict[str, Optional[object]] = {}
     unfrozen = _unfreeze_adjacent(board, matches)
@@ -140,17 +141,24 @@ def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict],
     for m, pos in zip(matches, merge_positions):
         n = len(m["cells"])
         level = m["level"]
+        shape = m["shape"]
         k = cell_key(pos["r"], pos["c"])
         if level == 1:
             score += n
-            results[k] = create_normal_cell(rng, m["shape"], 2)
+            results[k] = create_normal_cell(rng, shape, 2)
+            # L1 合并：n 格全部清空后升级到合并位，合并位变为 L2（仍存在），其余 n-1 格被消除
+            cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + (n - 1)
         elif level == 2:
             score += n * 2
-            results[k] = create_normal_cell(rng, m["shape"], 3)
+            results[k] = create_normal_cell(rng, shape, 3)
+            # L2 合并：合并位变为 L3，其余 n-1 格被消除
+            cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + (n - 1)
         else:
             score += n * 3
-            special_gained[m["shape"]] = special_gained.get(m["shape"], 0) + 1
+            special_gained[shape] = special_gained.get(shape, 0) + 1
             results[k] = None
+            # L3 合并：n 格全部消除（合并位也消失，产生任务分）
+            cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + n
         for p in m["cells"]:
             if p["r"] == pos["r"] and p["c"] == pos["c"]:
                 continue
@@ -163,4 +171,5 @@ def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict],
         r, c = map(int, k.split(","))
         board[r][c] = val
 
-    return {"score": score, "special_gained": special_gained, "unfrozen": unfrozen}
+    return {"score": score, "special_gained": special_gained,
+            "cleared_by_shape": cleared_by_shape, "unfrozen": unfrozen}
