@@ -10,13 +10,12 @@
 - **多输入观测**：`board` 28 通道 × 3 帧堆叠 = 84 通道 × 10×10 棋盘 + `global` 15 维全局向量（当前帧）
 - **本地推理服务**：浏览器每回合请求 Python 服务获取 RL 推荐走法
 - **课程学习**：难度 1–3 逐步增加步数限制、任务目标与冻结格
+- **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（84 通道），使模型感知棋盘变化趋势，学会需要 2–3 步连续布局才能触发消除的策略
 - **训练防抖**：
   - 仅允许「有效交换」（能触发消除或道具）进入动作 mask
   - 空转交换惩罚、每步成本、连续重复同一动作惩罚
   - 观测包含上一动作特征 `last_action`
-- **推理防抖**：
-  - 若模型重复上一动作，优先切换到其他合法动作
-  - 支持 `--stochastic` 非确定性推理模式
+- **推理模式**：支持 `--stochastic` 非确定性采样推理
 
 ## 二、快速开始（训练 → 推理 → 游戏）
 
@@ -133,9 +132,9 @@ python -m http.server 8080
 
 对应代码：`rl_python/env/observation.py`、`src/rl/observation.js`。
 
-### 3.2 `board` 通道（20 通道）
+### 3.2 单帧 `board` 通道（28 通道/帧，共 3 帧）
 
-棋盘为 10 行 × 10 列，每格在同一 `(r, c)` 位置可激活多个通道（例如普通格既占图形通道，也可能占冻结通道）。
+棋盘为 10 行 × 10 列，每格在同一 `(r, c)` 位置可激活多个通道（例如普通格既占图形通道，也可能占冻结通道）。以下为单帧的通道定义，网络实际接收的是 3 帧按此顺序拼接的结果，共 84 通道。
 
 | 通道索引 | 名称 | 含义 |
 |----------|------|------|
@@ -215,7 +214,7 @@ match3-ai/
 │  ├─ actions/
 │  │  └─ encoding.js                  # 动作编解码（180 维）、相邻交换枚举
 │  ├─ rl/
-│  │  ├─ observation.js               # JS 侧观测编码（20 通道 + 15 维 global）
+│  │  ├─ observation.js               # JS 侧观测编码（28 通道单帧 + 15 维 global；帧堆叠由 rl-policy.js 维护）
 │  │  └─ reward.js                    # JS 侧奖励定义（与 Python 训练奖励对齐参考）
 │  ├─ ai/
 │  │  ├─ rl-policy.js                 # 调用推理服务 /health、/predict；序列化局面 JSON
@@ -238,14 +237,14 @@ match3-ai/
    ├─ env/
    │  ├─ __init__.py                  # 包导出
    │  ├─ match3_env.py                # Gymnasium 环境（reset/step/action_masks/课程学习）
-   │  ├─ observation.py               # 训练观测编码（board 20ch + global 15d）
+   │  ├─ observation.py               # 训练观测编码（单帧 28ch；堆叠后 84ch × 3帧 + global 15d）
    │  └─ reward.py                    # 训练奖励（消除分、任务分、空转/重复动作惩罚）
    ├─ train/
    │  ├─ train_ppo.py                 # MaskablePPO 训练入口（checkpoint + eval 回调）
    │  └─ eval.py                      # 模型评估（胜率 / 平均分 / 平均回报）
    ├─ serve/
    │  ├─ state_codec.py               # 前端 JSON ↔ Python GameState 转换
-   │  └─ predict_server.py            # HTTP 推理 API（含动作去抖、CORS）
+   │  └─ predict_server.py            # HTTP 推理 API（接收帧历史、帧堆叠、CORS）
    ├─ tests/
    │  ├─ test_engine.py               # 引擎与环境冒烟测试（步进、观测形状）
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
@@ -257,18 +256,19 @@ match3-ai/
 
 **训练阶段（Python 内闭环）：**
 
-1. `Match3Env.reset()` 按课程难度创建新局
-2. `build_observation()` 生成 `{"board", "global"}`
-3. 模型根据 `obs + action_mask` 选择动作
-4. `step(action)` 调用引擎执行交换与结算
-5. `compute_reward()` 计算奖励并进入下一步
+1. `Match3Env.reset()` 按课程难度创建新局，初始化帧缓冲（`_frame_buffer`）
+2. `build_observation()` 生成单帧 `{"board"(28ch), "global"}`，压入帧缓冲
+3. `stack_observations()` 将最近 3 帧拼接为 `{"board"(84ch), "global"}`
+4. 模型根据堆叠 `obs + action_mask` 选择动作
+5. `step(action)` 调用引擎执行交换与结算，新帧压入缓冲
+6. `compute_reward()` 计算奖励并进入下一步
 
 **推理阶段（浏览器 + Python 服务）：**
 
-1. 前端 `serializeState(state)` 上送当前局面 JSON
-2. 服务端 `json_to_game_state()` 还原 `GameState`
-3. 生成 `obs + mask`，模型 `predict()`
-4. 若动作重复上一手，尝试切换备选合法动作
+1. 前端 `buildObservation(state)` 构建当前单帧，压入本地 `_frameHistory`（最多保留 3 帧）
+2. `findRlMove()` 将当前局面 JSON + `frameHistory` 一起 POST 到 `/predict`
+3. 服务端从 `frameHistory` 重建各帧 numpy 数组，调用 `stack_observations()` 堆叠
+4. 模型对堆叠 obs 执行 `predict()`，返回动作
 5. 返回 `from/to` 坐标给前端执行并播放动画
 
 ## 六、评估模型
