@@ -1,5 +1,5 @@
 import { ROWS, COLS, INITIAL_FROZEN_RATIO } from './constants.js';
-import { createCell } from './cells.js';
+import { createCell, createInitialCell } from './cells.js';
 import { findMatches } from './match.js';
 
 /**
@@ -37,7 +37,7 @@ export function reshuffleBoard(board, layout = null, maxAttempts = 200) {
         if (layout && !layout[r][c]) {
           board[r][c] = null; // void 格永远为 null
         } else {
-          board[r][c] = createCell();
+          board[r][c] = createInitialCell();
         }
       }
     }

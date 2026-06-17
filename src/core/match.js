@@ -168,12 +168,12 @@ function mergedResultCell(m) {
   const n = m.cells.length;
   const { shape, level } = m;
 
-  if (level === 3) {
-    // L3 合并：计任务分，合并位清空
+  if (level >= 2) {
+    // L2/L3 合并：计任务分，合并位清空
     return null;
   }
 
-  // L1/L2 合并，根据连消数生成不同结果
+  // L1 合并，根据连消数生成不同结果
   if (n >= 5) {
     // 5连+：生成"同"（color）道具
     return createPowerupCell(shape, 'color');
@@ -203,6 +203,7 @@ export function applyMerges(board, matches, mergePositions) {
       score += n;
     } else if (level === 2) {
       score += n * 2;
+      specialGained[m.shape] = (specialGained[m.shape] || 0) + 1;
     } else {
       score += n * 3;
       specialGained[m.shape] = (specialGained[m.shape] || 0) + 1;

@@ -7,6 +7,7 @@ import {
   COLS,
   SHAPES,
   SHAPE_NAMES,
+  TASK_TARGET,
   createGameState,
   cloneBoard,
   simulateSwap,
@@ -157,12 +158,12 @@ function renderHud() {
     sp.innerHTML = SHAPES.map((shape) => {
       const task = state.taskScores[shape] || 0;
       const isTarget = state.targetShapes.includes(shape);
-      const done = isTarget && task >= 4;
+      const done = isTarget && task >= TASK_TARGET;
       return `
         <div class="special-row ${isTarget ? 'is-target' : ''} ${done ? 'done' : ''}">
           <span class="special-icon ${shapeClass(shape)}"></span>
           <span>${SHAPE_NAMES[shape]}</span>
-          <span class="special-val">${task}${isTarget ? ' / 4' : ''}</span>
+          <span class="special-val">${task}${isTarget ? ` / ${TASK_TARGET}` : ''}</span>
           ${isTarget ? '<span class="badge">目标</span>' : ''}
         </div>
       `;
@@ -182,7 +183,7 @@ function renderHud() {
       st.className = 'status lose';
     } else {
       const names = state.targetShapes.map((s) => SHAPE_NAMES[s]).join('、');
-      st.textContent = `RL 已连接 · 目标：${names} 任务分各达 4 · 剩余 ${left} 步`;
+      st.textContent = `RL 已连接 · 目标：${names} 任务分各达 ${TASK_TARGET} · 剩余 ${left} 步`;
       st.className = 'status';
     }
   }

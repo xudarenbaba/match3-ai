@@ -23,7 +23,13 @@ export function createPowerupCell(shape = null, powerupType = null) {
 
 export function createCell() {
   if (Math.random() < POWERUP_SPAWN_RATE) return createPowerupCell();
-  return createNormalCell();
+  // 顶部落下的新格子只能是等级 1，形状随机
+  return createNormalCell(null, 1);
+}
+
+// 初始化棋盘时用：只生成等级 1 的普通格，不生成道具
+export function createInitialCell() {
+  return createNormalCell(null, 1);
 }
 
 export function isPowerup(cell) {
