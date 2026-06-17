@@ -6,3 +6,4 @@ export * from './gravity.js';
 export * from './powerup.js';
 export * from './resolver.js';
 export * from './game-state.js';
+export * from './layouts.js';

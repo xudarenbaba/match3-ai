@@ -3,6 +3,7 @@ from __future__ import annotations
 from match3_engine.cells import NormalCell, PowerCell
 from match3_engine.constants import SHAPES, MAX_STEPS, TASK_TARGET
 from match3_engine.game import GameState
+from match3_engine.layouts import get_layout
 
 
 def json_to_game_state(data: dict) -> GameState:
@@ -34,6 +35,13 @@ def json_to_game_state(data: dict) -> GameState:
     for key, value in (data.get("taskScores") or {}).items():
         task_scores[key] = int(value)
 
+    # 布局：从前端传来的 layoutName 还原，或使用 layoutMask（直接传 0/1 数组）
+    layout_name = data.get("layoutName", "full")
+    if data.get("layoutMask"):
+        layout = data["layoutMask"]
+    else:
+        layout = get_layout(layout_name)
+
     return GameState(
         board=board,
         score=int(data.get("score", 0)),
@@ -46,4 +54,6 @@ def json_to_game_state(data: dict) -> GameState:
         last_action=int(data.get("lastAction", -1)),
         won=bool(data.get("won", False)),
         over=bool(data.get("over", False)),
+        layout=layout,
+        layout_name=layout_name,
     )

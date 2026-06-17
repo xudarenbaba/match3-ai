@@ -1,6 +1,6 @@
 import { ROWS, COLS } from './constants.js';
 import { cellKey, inBounds } from './board.js';
-import { createNormalCell } from './cells.js';
+import { createNormalCell, createPowerupCell } from './cells.js';
 
 export function findMatches(board) {
   const matches = [];
@@ -154,6 +154,38 @@ export function pickMergePositions(matches, swapFrom, swapTo) {
   });
 }
 
+/**
+ * 根据合并数量决定在 merge position 生成什么格子：
+ *   3连 → level+1 的普通格（原有行为）
+ *   4连 → 列（column）道具
+ *   5连+ → 同（color）道具
+ *   L3 合并（任意数量）→ 计任务分，合并位清空（原有行为不变）
+ *
+ * @param {object} m match 对象 { cells, shape, level }
+ * @returns {object|null} 要放置在合并位的格子，null 表示清空
+ */
+function mergedResultCell(m) {
+  const n = m.cells.length;
+  const { shape, level } = m;
+
+  if (level === 3) {
+    // L3 合并：计任务分，合并位清空
+    return null;
+  }
+
+  // L1/L2 合并，根据连消数生成不同结果
+  if (n >= 5) {
+    // 5连+：生成"同"（color）道具
+    return createPowerupCell(shape, 'color');
+  } else if (n === 4) {
+    // 4连：生成"列"（column）道具
+    return createPowerupCell(shape, 'column');
+  } else {
+    // 3连：level+1 普通格
+    return createNormalCell(shape, level + 1);
+  }
+}
+
 export function applyMerges(board, matches, mergePositions) {
   let score = 0;
   const specialGained = {};
@@ -169,22 +201,23 @@ export function applyMerges(board, matches, mergePositions) {
 
     if (level === 1) {
       score += n;
-      results.set(cellKey(pos.r, pos.c), createNormalCell(m.shape, 2));
     } else if (level === 2) {
       score += n * 2;
-      results.set(cellKey(pos.r, pos.c), createNormalCell(m.shape, 3));
     } else {
       score += n * 3;
       specialGained[m.shape] = (specialGained[m.shape] || 0) + 1;
-      results.set(cellKey(pos.r, pos.c), null);
     }
+
+    // 决定合并位放什么
+    const resultCell = mergedResultCell(m);
+    results.set(cellKey(pos.r, pos.c), resultCell);
 
     m.cells.forEach((p) => {
       if (p.r === pos.r && p.c === pos.c) return;
       cleared.add(cellKey(p.r, p.c));
     });
 
-    mergeEvents.push({ match: m, position: pos, level, count: n });
+    mergeEvents.push({ match: m, position: pos, level, count: n, resultCell });
   });
 
   cleared.forEach((k) => {

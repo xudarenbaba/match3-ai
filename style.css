@@ -144,6 +144,13 @@ body {
   transition: transform 0.35s, box-shadow 0.35s, opacity 0.35s;
 }
 .cell.empty { background: #1c2535; }
+/* void 格子：永久空洞，视觉上完全隐藏 */
+.cell.void {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;
+}
 .cell.target-cell { outline: 1px dashed rgba(245, 158, 11, 0.4); outline-offset: -2px; }
 .cell.highlight {
   box-shadow: 0 0 0 2px var(--accent), 0 0 12px rgba(61, 156, 245, 0.45);

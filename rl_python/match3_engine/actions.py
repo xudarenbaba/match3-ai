@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from typing import Optional
 
 import numpy as np
 
@@ -38,16 +39,25 @@ def decode_action(action: int) -> dict | None:
     return {"from": {"r": r, "c": c}, "to": {"r": r + 1, "c": c}}
 
 
-def get_adjacent_swaps(board: Board) -> list:
+def get_adjacent_swaps(board: Board, layout: Optional[list] = None) -> list:
+    """返回相邻可交换格对。layout 为 None 时视为全 1；void 格的 swap 被排除。"""
     swaps = []
     seen = set()
     for r in range(ROWS):
         for c in range(COLS):
+            # 跳过 void 格
+            if layout and not layout[r][c]:
+                continue
             if not board[r][c]:
                 continue
             for dr, dc in DIRS:
                 nr, nc = r + dr, c + dc
-                if not in_bounds(nr, nc) or not board[nr][nc]:
+                if not in_bounds(nr, nc):
+                    continue
+                # 跳过 void 格
+                if layout and not layout[nr][nc]:
+                    continue
+                if not board[nr][nc]:
                     continue
                 key = (
                     f"{r},{c}-{nr},{nc}"
@@ -61,34 +71,39 @@ def get_adjacent_swaps(board: Board) -> list:
     return swaps
 
 
-def build_action_mask(board: Board) -> np.ndarray:
+def build_action_mask(board: Board, layout: Optional[list] = None) -> np.ndarray:
     mask = np.zeros(MAX_ACTIONS, dtype=np.float32)
     effective_found = False
 
-    for swap in get_adjacent_swaps(board):
+    for swap in get_adjacent_swaps(board, layout):
         idx = encode_swap(swap["from"], swap["to"])
         if idx < 0:
             continue
         test_board = clone_board(board)
-        result = try_swap(test_board, random.Random(0), swap["from"], swap["to"])
+        result = try_swap(test_board, random.Random(0), swap["from"], swap["to"], layout)
         if result.get("had_match") or result.get("used_powerup") or result.get("total_score", 0) > 0:
             mask[idx] = 1.0
             effective_found = True
 
     # 若不存在有效交换，则退化为任意相邻交换，确保环境不会卡死。
     if not effective_found:
-        for swap in get_adjacent_swaps(board):
+        for swap in get_adjacent_swaps(board, layout):
             idx = encode_swap(swap["from"], swap["to"])
             if idx >= 0:
                 mask[idx] = 1.0
     return mask
 
 
-def swap_from_action(board: Board, action: int) -> dict | None:
+def swap_from_action(board: Board, action: int, layout: Optional[list] = None) -> dict | None:
     swap = decode_action(action)
     if swap is None:
         return None
-    mask = build_action_mask(board)
+    # 检查两个格子是否都是活跃格
+    if layout:
+        fr, to = swap["from"], swap["to"]
+        if not layout[fr["r"]][fr["c"]] or not layout[to["r"]][to["c"]]:
+            return None
+    mask = build_action_mask(board, layout)
     if mask[action] < 0.5:
         return None
     return swap

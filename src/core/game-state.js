@@ -1,9 +1,9 @@
 import { SHAPES, MAX_STEPS, INITIAL_FROZEN_RATIO } from './constants.js';
-import { cloneBoard } from './board.js';
-import { createEmptyBoard } from './board.js';
+import { cloneBoard, createEmptyBoard } from './board.js';
 import { reshuffleBoard, freezeRandomCells } from './gravity.js';
 import { trySwap } from './resolver.js';
 import { encodeSwap } from '../actions/encoding.js';
+import { getLayout, pickLayout, LAYOUT_POOL } from './layouts.js';
 
 export function pickTwoShapes() {
   const copy = [...SHAPES];
@@ -12,15 +12,29 @@ export function pickTwoShapes() {
   return [a, b];
 }
 
+/**
+ * 创建新游戏状态。
+ * options.layoutName: 指定布局名称，不传则随机选取
+ * options.curriculumLevel: 1/2/3，影响布局池，默认 3
+ */
 export function createGameState(options = {}) {
   const targetShapes = options.targetShapes || pickTwoShapes();
+
+  // 布局选择
+  const curriculumLevel = options.curriculumLevel ?? 3;
+  const pool = LAYOUT_POOL[curriculumLevel] || LAYOUT_POOL[3];
+  const layoutName = options.layoutName || pickLayout(pool);
+  const layout = getLayout(layoutName);
+
   const board = createEmptyBoard();
-  reshuffleBoard(board);
+  reshuffleBoard(board, layout);
   if (options.freeze !== false) {
-    freezeRandomCells(board, options.frozenRatio ?? INITIAL_FROZEN_RATIO);
+    freezeRandomCells(board, options.frozenRatio ?? INITIAL_FROZEN_RATIO, layout);
   }
   return {
     board,
+    layout,
+    layoutName,
     score: 0,
     chainScoreTotal: 0,
     taskScores: Object.fromEntries(SHAPES.map((s) => [s, 0])),
@@ -49,7 +63,7 @@ export function checkVictory(state, taskTarget = 4) {
 
 export function executeMove(state, from, to) {
   if (state.over) return { ok: false, reason: '本局已结束' };
-  const result = trySwap(state.board, from, to);
+  const result = trySwap(state.board, from, to, {}, state.layout);
 
   state.score += result.totalScore;
   state.chainScoreTotal += result.chainScore;

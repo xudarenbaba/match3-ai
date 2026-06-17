@@ -90,6 +90,7 @@ function renderGrid(
   el.className = `grid ${phaseClass}`.trim();
   el.innerHTML = '';
 
+  const layout = state.layout || null;
   const mergedSet = new Set((mergeCells || []).map((p) => `${p.r},${p.c}`));
   const fallSet = new Set((fallCells || []).map((p) => `${p.r},${p.c}`));
   const powerSet = new Set((powerCells || []).map((p) => `${p.r},${p.c}`));
@@ -98,8 +99,15 @@ function renderGrid(
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const cell = board[r][c];
+      const isVoid = layout && !layout[r][c];
       const div = document.createElement('div');
       div.className = 'cell';
+
+      if (isVoid) {
+        div.classList.add('void');
+        el.appendChild(div);
+        continue;
+      }
 
       if (highlight || lastHighlight) {
         const { from, to } = highlight || lastHighlight;
@@ -232,7 +240,7 @@ async function onAiMove() {
   const preview = simulateSwap(state.board, move.from, move.to, {
     captureBoards: true,
     includeFinalBoard: true,
-  });
+  }, state.layout || null);
   if (!preview?.finalBoard) {
     log('预演失败，本次跳过');
     busy = false;

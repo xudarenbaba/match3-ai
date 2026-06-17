@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 import random
 
 from .board import Board, cell_key, in_bounds
-from .cells import create_normal_cell
+from .cells import create_normal_cell, create_powerup_cell
 from .constants import ROWS, COLS
 
 
@@ -130,10 +130,33 @@ def pick_merge_positions(matches: List[dict], swap_from: Optional[dict], swap_to
     return positions
 
 
+def _merged_result_cell(m: dict, rng: random.Random):
+    """
+    根据合并数量决定在 merge position 生成什么格子：
+      3连 → level+1 的普通格（原有行为）
+      4连 → 列（column）道具
+      5连+ → 同（color）道具
+      L3 合并（任意数量）→ 计任务分，合并位清空
+    """
+    n = len(m["cells"])
+    shape = m["shape"]
+    level = m["level"]
+
+    if level == 3:
+        return None
+
+    if n >= 5:
+        return create_powerup_cell(rng, shape, "color")
+    elif n == 4:
+        return create_powerup_cell(rng, shape, "column")
+    else:
+        return create_normal_cell(rng, shape, level + 1)
+
+
 def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict], rng: random.Random) -> dict:
     score = 0
     special_gained: Dict[str, int] = {}
-    cleared_by_shape: Dict[str, int] = {}  # 每种 shape 本轮被消除（清空）的格子数
+    cleared_by_shape: Dict[str, int] = {}
     cleared = set()
     results: Dict[str, Optional[object]] = {}
     unfrozen = _unfreeze_adjacent(board, matches)
@@ -143,22 +166,21 @@ def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict],
         level = m["level"]
         shape = m["shape"]
         k = cell_key(pos["r"], pos["c"])
+
         if level == 1:
             score += n
-            results[k] = create_normal_cell(rng, shape, 2)
-            # L1 合并：n 格全部清空后升级到合并位，合并位变为 L2（仍存在），其余 n-1 格被消除
             cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + (n - 1)
         elif level == 2:
             score += n * 2
-            results[k] = create_normal_cell(rng, shape, 3)
-            # L2 合并：合并位变为 L3，其余 n-1 格被消除
             cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + (n - 1)
         else:
             score += n * 3
             special_gained[shape] = special_gained.get(shape, 0) + 1
-            results[k] = None
-            # L3 合并：n 格全部消除（合并位也消失，产生任务分）
             cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + n
+
+        result_cell = _merged_result_cell(m, rng)
+        results[k] = result_cell
+
         for p in m["cells"]:
             if p["r"] == pos["r"] and p["c"] == pos["c"]:
                 continue
@@ -171,5 +193,17 @@ def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict],
         r, c = map(int, k.split(","))
         board[r][c] = val
 
+    # 构造 merge_events 列表（供 resolver 和 reward 使用）
+    merge_events = []
+    for m, pos in zip(matches, merge_positions):
+        merge_events.append({
+            "match": m,
+            "position": pos,
+            "level": m["level"],
+            "count": len(m["cells"]),
+            "result_cell": results.get(cell_key(pos["r"], pos["c"])),
+        })
+
     return {"score": score, "special_gained": special_gained,
-            "cleared_by_shape": cleared_by_shape, "unfrozen": unfrozen}
+            "cleared_by_shape": cleared_by_shape, "unfrozen": unfrozen,
+            "merge_events": merge_events}

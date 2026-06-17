@@ -1,29 +1,43 @@
 import { ROWS, COLS, SHAPES, POWERUP_TYPES } from '../core/constants.js';
 
-// 单帧 board 通道数
-const BOARD_CHANNELS = 28;
+// 单帧 board 通道数（原 28 + 1 个 layout_mask = 29）
+const BOARD_CHANNELS = 29;
 // 帧堆叠数，与 Python 侧 FRAME_STACK 保持一致
 export const FRAME_STACK = 3;
 // 堆叠后的 board 通道数
-export const STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK; // 84
+export const STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK; // 87
 const GLOBAL_DIM = 15;
 
 export const OBS_BOARD_CHANNELS = STACKED_BOARD_CHANNELS;
 export const OBS_GLOBAL_DIM = GLOBAL_DIM;
 
 /**
- * 构建单帧棋盘观测，返回普通 Array（便于 JSON 序列化传给推理服务）。
- * board: 长度 BOARD_CHANNELS*ROWS*COLS 的数组
- * global: 长度 GLOBAL_DIM 的数组
+ * 构建单帧棋盘观测。
+ * 通道说明（29 个）：
+ *   0-11  : shape×level 一热编码（4 shape × 3 level）
+ *   12-14 : 道具类型（column/bomb/color）
+ *   15    : 冻结标志
+ *   16-27 : 目标 shape×level 一热（仅目标 shape）
+ *   28    : layout_mask（1=活跃格，0=void 格）
  */
 export function buildObservation(state) {
   const board = new Array(BOARD_CHANNELS * ROWS * COLS).fill(0);
   const targetSet = new Set(state.targetShapes);
+  const layout = state.layout || null;
 
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
-      const cell = state.board[r][c];
       const base = r * COLS + c;
+
+      // 通道 28：layout_mask
+      const isActive = !layout || layout[r][c];
+      if (isActive) {
+        board[28 * ROWS * COLS + base] = 1;
+      } else {
+        continue; // void 格其他通道均为 0
+      }
+
+      const cell = state.board[r][c];
       if (!cell) continue;
 
       if (cell.kind === 'normal') {
@@ -48,7 +62,6 @@ export function buildObservation(state) {
           if (cell.kind === 'normal' && cell.level >= 1 && cell.level <= 3) {
             board[(16 + si * 3 + (cell.level - 1)) * ROWS * COLS + base] = 1;
           } else if (cell.kind === 'powerup') {
-            // 道具格视为最高进度，标记到 L3 通道
             board[(16 + si * 3 + 2) * ROWS * COLS + base] = 1;
           }
         }

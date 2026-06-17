@@ -10,12 +10,13 @@ from gymnasium import spaces
 from match3_engine.actions import build_action_mask, swap_from_action, decode_action
 from match3_engine.constants import MAX_ACTIONS, MAX_STEPS, TASK_TARGET, SHAPES, ROWS
 from match3_engine.game import create_game_state, execute_move, snapshot_state
+from match3_engine.layouts import LAYOUT_POOL
 from env.observation import build_observation, stack_observations, STACKED_BOARD_CHANNELS, GLOBAL_DIM
 from env.reward import compute_reward
 
 
 class Match3Env(gym.Env):
-    """消消乐 Gymnasium 环境，支持课程学习与帧堆叠。"""
+    """消消乐 Gymnasium 环境，支持课程学习、帧堆叠与不规则布局。"""
 
     metadata = {"render_modes": ["human"]}
 
@@ -24,10 +25,11 @@ class Match3Env(gym.Env):
         self.curriculum_level = curriculum_level
         self._rng = random.Random(seed)
         self.state = None
-        self._frame_buffer: list[dict] = []  # 存储最近 FRAME_STACK 帧的单帧 obs
+        self._frame_buffer: list[dict] = []
 
         self.observation_space = spaces.Dict(
             {
+                # board: 87 = 29 通道 × 3 帧堆叠（29 = 28 原始通道 + 1 layout_mask）
                 "board": spaces.Box(0.0, 1.0, shape=(STACKED_BOARD_CHANNELS, ROWS, ROWS), dtype=np.float32),
                 "global": spaces.Box(0.0, 1.0, shape=(GLOBAL_DIM,), dtype=np.float32),
             }
@@ -58,19 +60,20 @@ class Match3Env(gym.Env):
             task_target_shapes=self._target_shapes(),
             task_target=opts["task_target"],
             freeze=opts["freeze"],
+            curriculum_level=self.curriculum_level,
         )
-        # 重置帧缓冲：用当前帧填满（冷启动时全部是同一帧）
         frame = build_observation(self.state)
         self._frame_buffer = [frame]
         obs = stack_observations(self._frame_buffer)
-        mask = build_action_mask(self.state.board)
+        mask = build_action_mask(self.state.board, self.state.layout)
         return obs, {"action_mask": mask}
 
     def step(self, action: int) -> Tuple[dict, float, bool, bool, dict]:
         prev = snapshot_state(self.state)
-        swap = swap_from_action(self.state.board, int(action))
+        layout = self.state.layout
+        swap = swap_from_action(self.state.board, int(action), layout)
         if swap is None:
-            mask = build_action_mask(self.state.board)
+            mask = build_action_mask(self.state.board, layout)
             valid_idx = np.where(mask > 0)[0]
             if len(valid_idx) == 0:
                 obs = stack_observations(self._frame_buffer)
@@ -86,18 +89,18 @@ class Match3Env(gym.Env):
         result["action_index"] = int(action)
         reward = compute_reward(prev, result, self.state)
 
-        # 将新帧压入帧缓冲
         frame = build_observation(self.state)
         self._frame_buffer.append(frame)
         obs = stack_observations(self._frame_buffer)
-        mask = build_action_mask(self.state.board)
+        mask = build_action_mask(self.state.board, self.state.layout)
         info = {
             "action_mask": mask,
             "won": self.state.won,
             "score": self.state.score,
             "steps_used": self.state.steps_used,
+            "layout_name": self.state.layout_name,
         }
         return obs, reward, self.state.over, False, info
 
     def action_masks(self) -> np.ndarray:
-        return build_action_mask(self.state.board).astype(bool)
+        return build_action_mask(self.state.board, self.state.layout).astype(bool)

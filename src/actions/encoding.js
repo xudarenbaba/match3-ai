@@ -39,16 +39,23 @@ export function decodeAction(action) {
   return { from: { r, c }, to: { r: r + 1, c } };
 }
 
-export function getAdjacentSwaps(board) {
+/**
+ * 获取所有相邻可交换格对。
+ * layout: 10×10 的 0/1 数组，为 null 时视为全 1；void 格的 swap 被排除。
+ */
+export function getAdjacentSwaps(board, layout = null) {
   const swaps = [];
   const seen = new Set();
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
+      if (layout && !layout[r][c]) continue; // void 格
       if (!board[r][c]) continue;
       for (const [dr, dc] of DIRS) {
         const nr = r + dr;
         const nc = c + dc;
-        if (!inBounds(nr, nc) || !board[nr][nc]) continue;
+        if (!inBounds(nr, nc)) continue;
+        if (layout && !layout[nr][nc]) continue; // 目标 void 格
+        if (!board[nr][nc]) continue;
         const key =
           r < nr || (r === nr && c < nc)
             ? `${r},${c}-${nr},${nc}`
@@ -62,9 +69,9 @@ export function getAdjacentSwaps(board) {
   return swaps;
 }
 
-export function buildActionMask(board) {
+export function buildActionMask(board, layout = null) {
   const mask = new Float32Array(MAX_ACTIONS);
-  const swaps = getAdjacentSwaps(board);
+  const swaps = getAdjacentSwaps(board, layout);
   for (const swap of swaps) {
     const idx = encodeSwap(swap.from, swap.to);
     if (idx >= 0) mask[idx] = 1;
@@ -72,10 +79,14 @@ export function buildActionMask(board) {
   return mask;
 }
 
-export function swapFromAction(board, action) {
+export function swapFromAction(board, action, layout = null) {
   const swap = decodeAction(action);
   if (!swap) return null;
-  const mask = buildActionMask(board);
+  // 检查两个格子是否都是活跃格
+  if (layout) {
+    if (!layout[swap.from.r][swap.from.c] || !layout[swap.to.r][swap.to.c]) return null;
+  }
+  const mask = buildActionMask(board, layout);
   if (!mask[action]) return null;
   return swap;
 }

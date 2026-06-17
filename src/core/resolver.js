@@ -10,7 +10,7 @@ export function swapCells(board, from, to) {
   board[to.r][to.c] = tmp;
 }
 
-export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}) {
+export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}, layout = null) {
   const captureBoards = Boolean(options.captureBoards);
   let totalScore = 0;
   let chainScore = 0;
@@ -45,7 +45,7 @@ export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}
       unfrozen: merged.unfrozenByAdjacency,
       boardAfterMerge: captureBoards ? cloneBoard(board) : null,
     });
-    applyGravityAndRefill(board);
+    applyGravityAndRefill(board, layout);
     steps.push({
       type: 'refill',
       boardAfterRefill: captureBoards ? cloneBoard(board) : null,
@@ -56,7 +56,7 @@ export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}
   return { totalScore, chainScore, specialGained, steps, hadMatch };
 }
 
-function resolvePowerupSwap(board, from, to, captureBoards = false) {
+function resolvePowerupSwap(board, from, to, captureBoards = false, layout = null) {
   const powerEvents = [];
   const taskFromPowerup = {};
   let totalScore = 0;
@@ -82,7 +82,7 @@ function resolvePowerupSwap(board, from, to, captureBoards = false) {
   }
 
   for (const pw of powerups) {
-    const targets = powerupTargets(board, pw.pos, pw.partner);
+    const targets = powerupTargets(board, pw.pos, pw.partner, layout);
     const unfrozen = unfreezeTargets(board, targets);
     const removedCount = targets.length;
     if (removedCount === 0) continue;
@@ -124,13 +124,13 @@ function resolvePowerupSwap(board, from, to, captureBoards = false) {
     boardAfterPowerup: captureBoards ? cloneBoard(board) : null,
   });
 
-  applyGravityAndRefill(board);
+  applyGravityAndRefill(board, layout);
   steps.push({
     type: 'refill',
     boardAfterRefill: captureBoards ? cloneBoard(board) : null,
   });
 
-  const chain = resolveBoard(board, from, to, { captureBoards });
+  const chain = resolveBoard(board, from, to, { captureBoards }, layout);
   totalScore += chain.totalScore;
   chainScore += chain.totalScore;
 
@@ -146,11 +146,11 @@ function resolvePowerupSwap(board, from, to, captureBoards = false) {
   };
 }
 
-export function trySwap(board, from, to, options = {}) {
+export function trySwap(board, from, to, options = {}, layout = null) {
   swapCells(board, from, to);
   const afterSwapBoard = options.captureBoards ? cloneBoard(board) : null;
 
-  const powerRes = resolvePowerupSwap(board, from, to, options.captureBoards);
+  const powerRes = resolvePowerupSwap(board, from, to, options.captureBoards, layout);
   if (powerRes.usedPowerup) {
     return {
       success: true,
@@ -159,7 +159,7 @@ export function trySwap(board, from, to, options = {}) {
     };
   }
 
-  const normalRes = resolveBoard(board, from, to, options);
+  const normalRes = resolveBoard(board, from, to, options, layout);
   return {
     success: true,
     afterSwapBoard,
@@ -168,9 +168,9 @@ export function trySwap(board, from, to, options = {}) {
   };
 }
 
-export function simulateSwap(board, from, to, options = {}) {
+export function simulateSwap(board, from, to, options = {}, layout = null) {
   const sim = cloneBoard(board);
-  const result = trySwap(sim, from, to, options);
+  const result = trySwap(sim, from, to, options, layout);
   if (options.includeFinalBoard) {
     return { ...result, finalBoard: cloneBoard(sim) };
   }

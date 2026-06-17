@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -8,6 +7,7 @@ from typing import Dict, List, Optional
 from .board import Board, clone_board, create_empty_board
 from .constants import SHAPES, MAX_STEPS, TASK_TARGET
 from .gravity import reshuffle_board, freeze_random_cells
+from .layouts import get_layout, pick_layout, LAYOUT_POOL
 from .resolver import try_swap
 
 
@@ -24,6 +24,8 @@ class GameState:
     last_action: int = -1
     won: bool = False
     over: bool = False
+    layout: Optional[list] = None        # 10×10 的 0/1 列表，None 表示全 1
+    layout_name: str = "full"
 
 
 def pick_two_shapes(rng: random.Random) -> List[str]:
@@ -40,18 +42,29 @@ def create_game_state(
     task_target: int = TASK_TARGET,
     freeze: bool = True,
     frozen_ratio: float = 0.12,
+    layout_name: Optional[str] = None,
+    curriculum_level: int = 3,
 ) -> GameState:
     target_shapes = task_target_shapes or pick_two_shapes(rng)
+
+    # 布局选择
+    pool = LAYOUT_POOL.get(curriculum_level, LAYOUT_POOL[3])
+    chosen_layout_name = layout_name or pick_layout(rng, pool)
+    layout = get_layout(chosen_layout_name)
+
     board = create_empty_board()
-    reshuffle_board(board, rng)
+    reshuffle_board(board, rng, layout)
     if freeze:
-        freeze_random_cells(board, rng, frozen_ratio)
+        freeze_random_cells(board, rng, frozen_ratio, layout)
+
     return GameState(
         board=board,
         target_shapes=target_shapes,
         task_target=task_target,
         total_steps=total_steps,
         task_scores={s: 0 for s in SHAPES},
+        layout=layout,
+        layout_name=chosen_layout_name,
     )
 
 
@@ -68,6 +81,8 @@ def snapshot_state(state: GameState) -> GameState:
         last_action=state.last_action,
         won=state.won,
         over=state.over,
+        layout=state.layout,
+        layout_name=state.layout_name,
     )
 
 
@@ -86,7 +101,7 @@ def _apply_task_progress(state: GameState, result: dict) -> None:
 def execute_move(state: GameState, rng: random.Random, fr: dict, to: dict) -> dict:
     if state.over:
         return {"ok": False, "reason": "game over"}
-    result = try_swap(state.board, rng, fr, to)
+    result = try_swap(state.board, rng, fr, to, state.layout)
     result["last_action_before"] = state.last_action
     state.score += result["total_score"]
     state.chain_score_total += result["chain_score"]

@@ -79,7 +79,7 @@ class PredictHandler(BaseHTTPRequestHandler):
                 frames = [build_observation(state)]
 
             obs = stack_observations(frames)
-            mask = build_action_mask(state.board)
+            mask = build_action_mask(state.board, state.layout)
             action, _ = MODEL.predict(obs, action_masks=mask.astype(bool), deterministic=not NON_DETERMINISTIC)
             action = int(action)
 

@@ -5,22 +5,20 @@ from match3_engine.game import GameState
 
 REWARD = {
     # ── 密集信号 ──────────────────────────────────────────────────
-    # 每消除 1 格目标色块（无论等级）即时奖励。
-    # L1/L2 消除约产生 2-3 格，可得 0.6-0.9；L3×3 消除产生 task_delta，
-    # 此时 cleared_by_shape 也会计 3 格（+0.9），与 task_delta(+2.0) 叠加，
-    # 强化"消目标 L3"这个最终动作。
     "target_clear_per_cell": 0.3,
-
-    # 每消除 1 格非目标色块的轻微惩罚，制造相对偏好。
-    # 量级约为 target_clear 的 1/6，不会压制正常消除。
     "non_target_clear_per_cell": -0.05,
 
     # ── 稀疏任务信号 ──────────────────────────────────────────────
-    # L3×3 → special_gained → task_score +1 时触发。
     "task_delta": 2.0,
 
-    # ── 基础分数信号（保留但降权，避免和密集信号重叠过度） ──────────
-    "score_scale": 0.005,   # 从 0.01 降到 0.005
+    # ── 连消道具奖励：4连/5连消触发生成道具 ─────────────────────
+    # 生成 column 道具（4连消）
+    "combo_powerup_column": 0.4,
+    # 生成 color 道具（5连+消）
+    "combo_powerup_color": 0.6,
+
+    # ── 基础分数信号 ──────────────────────────────────────────────
+    "score_scale": 0.005,
     "chain_scale": 0.005,
 
     # ── 步数惩罚 ──────────────────────────────────────────────────
@@ -43,7 +41,7 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
     r += result.get("total_score", 0) * REWARD["score_scale"]
     r += result.get("chain_score", 0) * REWARD["chain_scale"]
 
-    # ── 密集目标色块奖励：每消除 1 格即时给分 ─────────────────────
+    # ── 密集目标色块奖励 ─────────────────────────────────────────
     target_set = set(nxt.target_shapes)
     cleared_by_shape = result.get("cleared_by_shape", {})
     for shape, n in cleared_by_shape.items():
@@ -52,10 +50,21 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
         else:
             r += n * REWARD["non_target_clear_per_cell"]
 
-    # ── 稀疏任务分：L3 合并完成 task_score +1 ─────────────────────
+    # ── 稀疏任务分 ────────────────────────────────────────────────
     for shape in nxt.target_shapes:
         delta = nxt.task_scores.get(shape, 0) - prev.task_scores.get(shape, 0)
         r += delta * REWARD["task_delta"]
+
+    # ── 连消道具生成奖励 ─────────────────────────────────────────
+    # merge_events 中 result_cell 为道具时触发
+    for event in result.get("merge_events", []):
+        rc = event.get("result_cell")
+        if rc and getattr(rc, "kind", None) == "powerup":
+            pt = getattr(rc, "powerup_type", "")
+            if pt == "column":
+                r += REWARD["combo_powerup_column"]
+            elif pt == "color":
+                r += REWARD["combo_powerup_color"]
 
     # ── 步数惩罚 ──────────────────────────────────────────────────
     if not result.get("had_match") and not result.get("used_powerup"):

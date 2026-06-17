@@ -5,22 +5,37 @@ import numpy as np
 from match3_engine.constants import ROWS, COLS, SHAPES, POWERUP_TYPES
 from match3_engine.game import GameState
 
-# 单帧 board 通道数
-BOARD_CHANNELS = 28
+# 单帧 board 通道数（原 28 + 1 个 layout_mask = 29）
+BOARD_CHANNELS = 29
 # 帧堆叠数（当前帧 + 前 N-1 帧）
 FRAME_STACK = 3
 # 堆叠后送入网络的 board 通道数
-STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK  # 84
+STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK  # 87
 GLOBAL_DIM = 15
 
 
 def build_observation(state: GameState) -> dict:
-    """构建单帧观测，board shape=(28,10,10)，global shape=(15,)。"""
+    """构建单帧观测，board shape=(29,10,10)，global shape=(15,)。
+    通道说明（29 个）：
+      0-11  : shape×level 一热编码（4 shape × 3 level）
+      12-14 : 道具类型（column/bomb/color）
+      15    : 冻结标志
+      16-27 : 目标 shape×level 一热（与通道 0-11 相同结构，仅标目标 shape）
+      28    : layout_mask（1=活跃格，0=void 格）
+    """
     board = np.zeros((BOARD_CHANNELS, ROWS, COLS), dtype=np.float32)
     target_set = set(state.target_shapes)
+    layout = state.layout  # 可能为 None（全 1 满格）
 
     for r in range(ROWS):
         for c in range(COLS):
+            # 通道 28：layout_mask
+            if layout is None or layout[r][c]:
+                board[28, r, c] = 1.0
+            else:
+                # void 格：其他通道均为 0，layout_mask 也为 0
+                continue
+
             cell = state.board[r][c]
             if cell is None:
                 continue
@@ -38,7 +53,6 @@ def build_observation(state: GameState) -> dict:
                 if cell.kind == "normal" and 1 <= cell.level <= 3:
                     board[16 + si * 3 + (cell.level - 1), r, c] = 1.0
                 elif cell.kind == "powerup":
-                    # 道具格视为最高进度，标记到 L3 通道
                     board[16 + si * 3 + 2, r, c] = 1.0
 
     steps_left = max(0, state.total_steps - state.steps_used)
@@ -63,12 +77,11 @@ def stack_observations(frames: list[dict]) -> dict:
 
     frames: 长度为 FRAME_STACK 的列表，index 0 为最旧帧，index -1 为最新帧。
     若历史帧不足，用零帧补齐最旧位置。
-    返回 board shape=(84,10,10)，global 取最新帧的 (15,)。
+    返回 board shape=(87,10,10)，global 取最新帧的 (15,)。
     """
-    # 补齐历史帧
     while len(frames) < FRAME_STACK:
         frames = [{"board": np.zeros((BOARD_CHANNELS, ROWS, COLS), dtype=np.float32),
                    "global": np.zeros(GLOBAL_DIM, dtype=np.float32)}] + frames
     frames = frames[-FRAME_STACK:]
-    stacked_board = np.concatenate([f["board"] for f in frames], axis=0)  # (84,10,10)
+    stacked_board = np.concatenate([f["board"] for f in frames], axis=0)  # (87,10,10)
     return {"board": stacked_board, "global": frames[-1]["global"]}
