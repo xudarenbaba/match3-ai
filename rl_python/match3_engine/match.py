@@ -136,13 +136,13 @@ def _merged_result_cell(m: dict, rng: random.Random):
       3连 → level+1 的普通格（原有行为）
       4连 → 列（column）道具
       5连+ → 同（color）道具
-      L3 合并（任意数量）→ 计任务分，合并位清空
+      L2/L3 合并（任意数量）→ 计任务分，合并位清空
     """
     n = len(m["cells"])
     shape = m["shape"]
     level = m["level"]
 
-    if level == 3:
+    if level >= 2:
         return None
 
     if n >= 5:
@@ -172,7 +172,8 @@ def apply_merges(board: Board, matches: List[dict], merge_positions: List[dict],
             cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + (n - 1)
         elif level == 2:
             score += n * 2
-            cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + (n - 1)
+            special_gained[shape] = special_gained.get(shape, 0) + 1
+            cleared_by_shape[shape] = cleared_by_shape.get(shape, 0) + n
         else:
             score += n * 3
             special_gained[shape] = special_gained.get(shape, 0) + 1

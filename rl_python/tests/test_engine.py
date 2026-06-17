@@ -110,28 +110,38 @@ def test_4_combo_generates_column_powerup():
 
 
 def test_5_combo_generates_color_powerup():
-    """5连+消应生成 color 道具。"""
+    """L1 5连+消应生成 color 道具；L2 5连消直接清空（L2 为最高级，不再升级）。"""
     from match3_engine.match import find_matches, pick_merge_positions, apply_merges
     from match3_engine.cells import NormalCell
     from match3_engine.board import create_empty_board
 
     rng = random.Random(0)
+
+    # L1 5连消 → 应生成 color 道具
     board = create_empty_board()
     for c in range(5):
-        board[5][c] = NormalCell(shape="square", level=2)
-
+        board[5][c] = NormalCell(shape="square", level=1)
     matches = find_matches(board)
     assert len(matches) == 1
     assert len(matches[0]["cells"]) == 5
-
     positions = pick_merge_positions(matches, None, None)
     apply_merges(board, matches, positions, rng)
-
     pos = positions[0]
     result_cell = board[pos["r"]][pos["c"]]
     assert result_cell is not None
     assert result_cell.kind == "powerup"
     assert result_cell.powerup_type == "color", f"Expected color, got {result_cell.powerup_type}"
+
+    # L2 5连消 → 直接清空（L2 为最高级，计任务分，合并位也清空）
+    board2 = create_empty_board()
+    for c in range(5):
+        board2[5][c] = NormalCell(shape="square", level=2)
+    matches2 = find_matches(board2)
+    positions2 = pick_merge_positions(matches2, None, None)
+    result2 = apply_merges(board2, matches2, positions2, rng)
+    pos2 = positions2[0]
+    assert board2[pos2["r"]][pos2["c"]] is None, "L2 merge position should be cleared"
+    assert result2["special_gained"].get("square", 0) == 1, "L2 merge should gain task score"
 
 
 def test_layout_mask_in_observation():

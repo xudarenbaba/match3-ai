@@ -8,8 +8,13 @@ REWARD = {
     "target_clear_per_cell": 0.3,
     "non_target_clear_per_cell": -0.05,
 
+    # ── L2 目标格消除额外奖励（在 target_clear 基础上叠加）────────
+    # L2 目标三连消是当前唯一能直接得任务分的操作，需要和 L1 目标消除
+    # 拉开明显差距，让模型优先学会「凑L2再消」而不是随手消L1
+    "target_L2_merge_bonus": 1.5,
+
     # ── 稀疏任务信号 ──────────────────────────────────────────────
-    "task_delta": 2.0,
+    "task_delta": 3.0,
 
     # ── 连消道具奖励：4连/5连消触发生成道具 ─────────────────────
     # 生成 column 道具（4连消）
@@ -55,9 +60,13 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
         delta = nxt.task_scores.get(shape, 0) - prev.task_scores.get(shape, 0)
         r += delta * REWARD["task_delta"]
 
-    # ── 连消道具生成奖励 ─────────────────────────────────────────
-    # merge_events 中 result_cell 为道具时触发
+    # ── L2 目标格消除额外奖励 + 连消道具生成奖励 ────────────────
+    # merge_events 包含每次合并的 level/shape/result_cell
     for event in result.get("merge_events", []):
+        # L2 目标格消除额外奖励（在上方 cleared_by_shape 通用奖励基础上叠加）
+        if event.get("level") == 2 and event.get("match", {}).get("shape") in target_set:
+            r += REWARD["target_L2_merge_bonus"]
+        # 道具生成奖励
         rc = event.get("result_cell")
         if rc and getattr(rc, "kind", None) == "powerup":
             pt = getattr(rc, "powerup_type", "")

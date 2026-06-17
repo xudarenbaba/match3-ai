@@ -7,15 +7,16 @@
 ## 一、核心特性
 
 - **MaskablePPO 强化学习**：动作空间 180 维（90 横向 + 90 纵向相邻交换）
-- **多输入观测**：`board` 28 通道 × 3 帧堆叠 = 84 通道 × 10×10 棋盘 + `global` 15 维全局向量（当前帧）
+- **多输入观测**：`board` 29 通道 × 3 帧堆叠 = 87 通道 × 10×10 棋盘 + `global` 15 维全局向量（当前帧）
 - **本地推理服务**：浏览器每回合请求 Python 服务获取 RL 推荐走法
 - **课程学习**：难度 1–3 逐步增加步数限制、任务目标与冻结格
-- **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（84 通道），使模型感知棋盘变化趋势，学会需要 2–3 步连续布局才能触发消除的策略
+- **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（87 通道），使模型感知棋盘变化趋势
+- **2-step lookahead 推理**：推理时对 top-K 候选动作各模拟一步，选择「即时奖励 + γ × 下一状态价值」最高的动作，解决死循环与短视问题，不需要重新训练模型
 - **训练防抖**：
   - 仅允许「有效交换」（能触发消除或道具）进入动作 mask
   - 空转交换惩罚、每步成本、连续重复同一动作惩罚
   - 观测包含上一动作特征 `last_action`
-- **推理模式**：支持 `--stochastic` 非确定性采样推理
+- **推理模式**：支持 `--stochastic` 非确定性采样，`--top-k` 调节 lookahead 候选数
 
 ## 二、快速开始（训练 → 推理 → 游戏）
 
@@ -41,6 +42,8 @@ python train/train_ppo.py --curriculum 3 --timesteps 500000 --n-envs 8
 ```bash
 python train/train_ppo.py --curriculum 3 --timesteps 800000 --n-envs 8 --save-dir runs/ppo_match3_v2
 ```
+
+> **注意**：合并规则在 v1 训练完成后已更新（L2 合并即为最高级，直接计任务分），因此 v1 模型是在旧规则下训练的，建议重新训练一版。
 
 常用参数：
 
@@ -91,6 +94,12 @@ python serve/predict_server.py --model runs/ppo_match3_v2/best/best_model
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model --stochastic
 ```
 
+调节 2-step lookahead 候选数（默认 8，越大越精确但略慢）：
+
+```bash
+python serve/predict_server.py --model runs/ppo_match3_v2/final_model --top-k 12
+```
+
 自定义端口：
 
 ```bash
@@ -123,18 +132,18 @@ python -m http.server 8080
 
 | 字段 | 形状 | 取值范围 | 说明 |
 |------|------|----------|------|
-| `board` | `(84, 10, 10)` | `[0, 1]` | 3 帧堆叠棋盘特征：28 通道/帧 × 3 帧，最旧帧在前，最新帧在后 |
+| `board` | `(87, 10, 10)` | `[0, 1]` | 3 帧堆叠棋盘特征：29 通道/帧 × 3 帧，最旧帧在前，最新帧在后 |
 | `global` | `(15,)` | `[0, 1]` | 当前帧全局标量特征（步数、分数、任务进度等） |
 
-**帧堆叠说明**：每次决策时将当前帧与前 2 帧的棋盘观测沿通道轴拼接，使模型能感知棋盘的变化趋势，从而学会需要连续 2–3 步才能触发消除的布局策略。历史帧不足时用零帧补齐。`global` 向量始终取最新帧，不堆叠。
+**帧堆叠说明**：每次决策时将当前帧与前 2 帧的棋盘观测沿通道轴拼接，使模型能感知棋盘的变化趋势。历史帧不足时用零帧补齐。`global` 向量始终取最新帧，不堆叠。
 
-对应常量：`rl_python/env/observation.py` 中 `FRAME_STACK=3`、`BOARD_CHANNELS=28`、`STACKED_BOARD_CHANNELS=84`。
+对应常量：`rl_python/env/observation.py` 中 `FRAME_STACK=3`、`BOARD_CHANNELS=29`、`STACKED_BOARD_CHANNELS=87`。
 
 对应代码：`rl_python/env/observation.py`、`src/rl/observation.js`。
 
-### 3.2 单帧 `board` 通道（28 通道/帧，共 3 帧）
+### 3.2 单帧 `board` 通道（29 通道/帧，共 3 帧）
 
-棋盘为 10 行 × 10 列，每格在同一 `(r, c)` 位置可激活多个通道（例如普通格既占图形通道，也可能占冻结通道）。以下为单帧的通道定义，网络实际接收的是 3 帧按此顺序拼接的结果，共 84 通道。
+棋盘为 10 行 × 10 列，每格在同一 `(r, c)` 位置可激活多个通道（例如普通格既占图形通道，也可能占冻结通道）。以下为单帧的通道定义，网络实际接收的是 3 帧按此顺序拼接的结果，共 87 通道。
 
 | 通道索引 | 名称 | 含义 |
 |----------|------|------|
@@ -147,17 +156,18 @@ python -m http.server 8080
 | 14 | `powerup_color` | 同形全消道具格 |
 | 15 | `frozen` | 该格被冻结（不可交换） |
 | 16 | `target_circle_L1` | 目标圆形，等级 1 |
-| 17 | `target_circle_L2` | 目标圆形，等级 2 |
-| 18 | `target_circle_L3` | 目标圆形，等级 3（含道具格） |
+| 17 | `target_circle_L2` | 目标圆形，等级 2（当前最高级） |
+| 18 | `target_circle_L3` | 目标圆形，等级 3（含道具格，L3 格实际不再生成） |
 | 19 | `target_square_L1` | 目标方形，等级 1 |
-| 20 | `target_square_L2` | 目标方形，等级 2 |
+| 20 | `target_square_L2` | 目标方形，等级 2（当前最高级） |
 | 21 | `target_square_L3` | 目标方形，等级 3（含道具格） |
 | 22 | `target_triangle_L1` | 目标三角形，等级 1 |
-| 23 | `target_triangle_L2` | 目标三角形，等级 2 |
+| 23 | `target_triangle_L2` | 目标三角形，等级 2（当前最高级） |
 | 24 | `target_triangle_L3` | 目标三角形，等级 3（含道具格） |
 | 25 | `target_star_L1` | 目标星形，等级 1 |
-| 26 | `target_star_L2` | 目标星形，等级 2 |
+| 26 | `target_star_L2` | 目标星形，等级 2（当前最高级） |
 | 27 | `target_star_L3` | 目标星形，等级 3（含道具格） |
+| 28 | `layout_mask` | 活跃格标志（1 = 有效格，0 = void 格） |
 
 空位（`null`）不激活任何通道。
 
@@ -249,7 +259,8 @@ match3-ai/
    │  ├─ test_engine.py               # 引擎与环境冒烟测试（步进、观测形状）
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
    └─ runs/                           # 训练产物（部分已提交 git，见下方说明）
-       └─ ppo_match3_v2/               # 示例实验目录（final_model.zip 和 best/ 已提交）
+       ├─ ppo_match3_v1/               # v1 模型（旧合并规则下训练，建议重训覆盖）
+       └─ ppo_match3_v2/               # 推荐新训练目录（final_model.zip 和 best/ 提交 git）
 ```
 
 ## 五、训练与推理链路
@@ -268,7 +279,7 @@ match3-ai/
 1. 前端 `buildObservation(state)` 构建当前单帧，压入本地 `_frameHistory`（最多保留 3 帧）
 2. `findRlMove()` 将当前局面 JSON + `frameHistory` 一起 POST 到 `/predict`
 3. 服务端从 `frameHistory` 重建各帧 numpy 数组，调用 `stack_observations()` 堆叠
-4. 模型对堆叠 obs 执行 `predict()`，返回动作
+4. **2-step lookahead**：取 top-K 候选动作，对每个候选用 Python 引擎模拟一步，用 value head 估算下一状态价值，选择「即时奖励 + 0.99 × V(s')」最高的动作
 5. 返回 `from/to` 坐标给前端执行并播放动画
 
 ## 六、奖励函数设计
@@ -284,13 +295,13 @@ match3-ai/
 | 基础得分 | `total_score × 0.005` | 降权保留，避免与密集信号重叠 |
 | 连锁得分 | `chain_score × 0.005` | 鼓励连锁消除 |
 
-### 6.2 稀疏信号（L3 合并完成时）
+### 6.2 稀疏信号（L2 合并完成时）
 
 | 信号 | 公式 | 说明 |
 |------|------|------|
-| **任务进度** | `task_delta × +2.0` | L3×3 → `special_gained` → `task_score +1` 时触发 |
+| **任务进度** | `task_delta × +2.0` | L2 三连消 → `special_gained` → `task_score +1` 时触发（L2 为当前最高级） |
 
-消除目标 L3 时，`cleared_by_shape(+0.9)` 与 `task_delta(+2.0)` 叠加为 +2.9，强化"完成目标"这个最终动作。
+消除目标 L2 时，`cleared_by_shape(+0.9)` 与 `task_delta(+2.0)` 叠加为 +2.9，强化"完成目标"这个最终动作。
 
 ### 6.3 步数惩罚
 

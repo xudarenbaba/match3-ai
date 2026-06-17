@@ -29,8 +29,10 @@ python -m pytest tests/test_engine.py -v        # run from rl_python/
 python tests/test_predict_load.py               # requires a saved model
 
 # inference server (must be running for the frontend's RL button to work)
+# uses 2-step lookahead by default (top-k=8); add --top-k N to adjust
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model --stochastic
+python serve/predict_server.py --model runs/ppo_match3_v2/final_model --top-k 12
 
 # frontend (serve from repo root)
 python -m http.server 8080
@@ -64,7 +66,7 @@ The browser's "RL 出手" button POSTs to `http://127.0.0.1:8765/predict`. This 
 
 ## Trained model in git
 
-`rl_python/runs/ppo_match3_v2/final_model.zip` (~13 MB) and `runs/ppo_match3_v2/best/` are **committed to git**. `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
+`rl_python/runs/ppo_match3_v1/final_model.zip` and `runs/ppo_match3_v1/best/` are **committed to git** (trained under old merge rules — L2 merge did not count as task score). A retrain targeting `runs/ppo_match3_v2/` is recommended. `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
 
 ## Action space
 
