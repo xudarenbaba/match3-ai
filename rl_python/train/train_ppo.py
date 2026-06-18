@@ -67,10 +67,10 @@ def main():
         verbose=1,
         tensorboard_log=os.path.join(args.save_dir, "tb"),
         learning_rate=3e-4,
-        n_steps=1024,
-        batch_size=256,
+        n_steps=2048,    # 1024 → 2048：更长的 GAE 窗口，win_bonus 信号传播更远
+        batch_size=512,  # 256 → 512：配合 n_steps 增大
         gamma=0.99,
-        ent_coef=0.01,
+        ent_coef=0.03,   # 0.01 → 0.03：增加探索，避免早收敛到次优策略
         policy_kwargs=policy_kwargs,
         seed=args.seed,
     )

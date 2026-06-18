@@ -13,6 +13,12 @@ REWARD = {
     # 拉开明显差距，让模型优先学会「凑L2再消」而不是随手消L1
     "target_L2_merge_bonus": 1.5,
 
+    # ── 多连消奖励：让 4连/5连明显优于 3连 ──────────────────────
+    # 解决模型无法从 action mask（0/1）中感知连消数的问题，
+    # 显式加权让 4连 vs 3连 差距从 0.7 扩大到 ~2.0
+    "match_size_bonus_4": 1.0,   # 4连消额外加（目标或非目标均计）
+    "match_size_bonus_5": 2.0,   # 5连+消额外加
+
     # ── 稀疏任务信号 ──────────────────────────────────────────────
     "task_delta": 3.0,
 
@@ -60,12 +66,23 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
         delta = nxt.task_scores.get(shape, 0) - prev.task_scores.get(shape, 0)
         r += delta * REWARD["task_delta"]
 
-    # ── L2 目标格消除额外奖励 + 连消道具生成奖励 ────────────────
-    # merge_events 包含每次合并的 level/shape/result_cell
+    # ── L2 目标格消除额外奖励 + 多连消奖励 + 道具生成奖励 ────────
+    # merge_events 包含每次合并的 level/shape/count/result_cell
     for event in result.get("merge_events", []):
-        # L2 目标格消除额外奖励（在上方 cleared_by_shape 通用奖励基础上叠加）
-        if event.get("level") == 2 and event.get("match", {}).get("shape") in target_set:
+        n = event.get("count", 0)
+        level = event.get("level", 0)
+        shape = event.get("match", {}).get("shape")
+
+        # L2 目标格消除额外奖励
+        if level == 2 and shape in target_set:
             r += REWARD["target_L2_merge_bonus"]
+
+        # 多连消奖励（4连/5连+，不区分目标与否）
+        if n == 4:
+            r += REWARD["match_size_bonus_4"]
+        elif n >= 5:
+            r += REWARD["match_size_bonus_5"]
+
         # 道具生成奖励
         rc = event.get("result_cell")
         if rc and getattr(rc, "kind", None) == "powerup":

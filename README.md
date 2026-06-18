@@ -40,20 +40,30 @@ python train/train_ppo.py --curriculum 3 --timesteps 500000 --n-envs 8
 指定保存目录（推荐用于多轮实验，如 `ppo_match3_v2`）：
 
 ```bash
-python train/train_ppo.py --curriculum 3 --timesteps 800000 --n-envs 8 --save-dir runs/ppo_match3_v2
+python train/train_ppo.py --curriculum 3 --timesteps 1500000 --n-envs 8 --save-dir runs/ppo_match3_v2
 ```
 
-> **注意**：合并规则在 v1 训练完成后已更新（L2 合并即为最高级，直接计任务分），因此 v1 模型是在旧规则下训练的，建议重新训练一版。
+> **注意**：v1 模型在旧合并规则（L2 不计任务分）下训练，且奖励函数和训练参数均已更新，需重新训练。
 
 常用参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--curriculum` | `3` | 课程难度 1（简单）/ 2（中等）/ 3（完整） |
-| `--timesteps` | `500000` | 总训练步数 |
+| `--timesteps` | `500000` | 总训练步数（推荐 1500000） |
 | `--n-envs` | `8` | 并行环境数 |
 | `--save-dir` | `runs/ppo_match3` | 模型、checkpoint、TensorBoard 日志目录 |
 | `--seed` | `42` | 随机种子 |
+
+当前训练超参（`train_ppo.py`）：
+
+| 超参 | 值 | 说明 |
+|------|----|------|
+| `n_steps` | `2048` | GAE 窗口，覆盖约 20 局，win_bonus 信号传播更远 |
+| `batch_size` | `512` | 配合 n_steps 增大 |
+| `ent_coef` | `0.03` | 熵系数，增加探索避免早期收敛到次优策略 |
+| `gamma` | `0.99` | 折扣因子 |
+| `learning_rate` | `3e-4` | Adam 学习率 |
 
 训练产物说明：
 
@@ -224,7 +234,7 @@ match3-ai/
 │  ├─ actions/
 │  │  └─ encoding.js                  # 动作编解码（180 维）、相邻交换枚举
 │  ├─ rl/
-│  │  ├─ observation.js               # JS 侧观测编码（28 通道单帧 + 15 维 global；帧堆叠由 rl-policy.js 维护）
+│  │  ├─ observation.js               # JS 侧观测编码（29 通道单帧 + 15 维 global；帧堆叠由 rl-policy.js 维护）
 │  │  └─ reward.js                    # JS 侧奖励定义（与 Python 训练奖励对齐参考）
 │  ├─ ai/
 │  │  ├─ rl-policy.js                 # 调用推理服务 /health、/predict；序列化局面 JSON
@@ -247,14 +257,14 @@ match3-ai/
    ├─ env/
    │  ├─ __init__.py                  # 包导出
    │  ├─ match3_env.py                # Gymnasium 环境（reset/step/action_masks/课程学习）
-   │  ├─ observation.py               # 训练观测编码（单帧 28ch；堆叠后 84ch × 3帧 + global 15d）
+   │  ├─ observation.py               # 训练观测编码（单帧 29ch；堆叠后 87ch × 3帧 + global 15d）
    │  └─ reward.py                    # 训练奖励（消除分、任务分、空转/重复动作惩罚）
    ├─ train/
    │  ├─ train_ppo.py                 # MaskablePPO 训练入口（checkpoint + eval 回调）
    │  └─ eval.py                      # 模型评估（胜率 / 平均分 / 平均回报）
    ├─ serve/
    │  ├─ state_codec.py               # 前端 JSON ↔ Python GameState 转换
-   │  └─ predict_server.py            # HTTP 推理 API（接收帧历史、帧堆叠、CORS）
+   │  └─ predict_server.py            # HTTP 推理 API（帧堆叠 + 2-step lookahead）
    ├─ tests/
    │  ├─ test_engine.py               # 引擎与环境冒烟测试（步进、观测形状）
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
@@ -268,8 +278,8 @@ match3-ai/
 **训练阶段（Python 内闭环）：**
 
 1. `Match3Env.reset()` 按课程难度创建新局，初始化帧缓冲（`_frame_buffer`）
-2. `build_observation()` 生成单帧 `{"board"(28ch), "global"}`，压入帧缓冲
-3. `stack_observations()` 将最近 3 帧拼接为 `{"board"(84ch), "global"}`
+2. `build_observation()` 生成单帧 `{"board"(29ch), "global"}`，压入帧缓冲
+3. `stack_observations()` 将最近 3 帧拼接为 `{"board"(87ch), "global"}`
 4. 模型根据堆叠 `obs + action_mask` 选择动作
 5. `step(action)` 调用引擎执行交换与结算，新帧压入缓冲
 6. `compute_reward()` 计算奖励并进入下一步
@@ -290,8 +300,13 @@ match3-ai/
 
 | 信号 | 公式 | 说明 |
 |------|------|------|
-| **目标色块消除** | `cleared_target_cells × +0.3` | 每消除 1 格目标色块即时奖励，L1/L2/L3 均计 |
+| **目标色块消除** | `cleared_target_cells × +0.3` | 每消除 1 格目标色块即时奖励（L1 三连消 cleared=n-1；L2 三连消 cleared=n） |
+| **L2 目标格合并额外奖励** | `+1.5` / 次 | L2 为最高级，直接计任务分，在 target_clear 基础上额外叠加 |
 | **非目标色块消除** | `cleared_non_target_cells × -0.05` | 轻微惩罚，制造对目标的相对偏好 |
+| **4连消额外奖励** | `+1.0` / 次 | 让 4连明显优于 3连（目标/非目标均计），解决模型忽视多连消机会的问题 |
+| **5连+消额外奖励** | `+2.0` / 次 | 让 5连明显优于 4连（目标/非目标均计） |
+| **生成 column 道具**（4连消） | `+0.4` | 鼓励多连消触发道具 |
+| **生成 color 道具**（5连+消） | `+0.6` | 鼓励多连消触发道具 |
 | 基础得分 | `total_score × 0.005` | 降权保留，避免与密集信号重叠 |
 | 连锁得分 | `chain_score × 0.005` | 鼓励连锁消除 |
 
@@ -299,9 +314,9 @@ match3-ai/
 
 | 信号 | 公式 | 说明 |
 |------|------|------|
-| **任务进度** | `task_delta × +2.0` | L2 三连消 → `special_gained` → `task_score +1` 时触发（L2 为当前最高级） |
+| **任务进度** | `task_delta × +3.0` | L2 三连消 → `special_gained` → `task_score +1` 时触发（L2 为当前最高级） |
 
-消除目标 L2 时，`cleared_by_shape(+0.9)` 与 `task_delta(+2.0)` 叠加为 +2.9，强化"完成目标"这个最终动作。
+消除目标 L2 时各信号叠加：`target_clear(+0.9)` + `L2_bonus(+1.5)` + `task_delta(+3.0)` + `score(+0.03)` - `step(-0.03)` = **+5.4**，远高于其他任何单步操作，强化"完成目标"这个最终动作。
 
 ### 6.3 步数惩罚
 
@@ -317,6 +332,26 @@ match3-ai/
 |------|------|
 | 胜利 | `+50.0 + 剩余步数 × 0.2` |
 | 失败 | `-10.0 + 每目标缺口数 × -3.0` |
+
+### 6.5 即时奖励优先级排序
+
+下表为各典型操作的单步即时奖励（不含终局信号），反映模型被训练成优先选择的操作顺序：
+
+| 优先级 | 操作 | 即时奖励 | 说明 |
+|--------|------|---------|------|
+| 1 | **L2 目标 3连消**（task+1） | **+5.39** | 唯一直接得任务分的操作，信号最强 |
+| 2 | L1 目标 5连消 → color 道具 | +3.79 | 多连消奖励 + 道具奖励叠加 |
+| 3 | L1 非目标 5连消 → color 道具 | +2.39 | 非目标但多连消信号强 |
+| 4 | L1 目标 4连消 → column 道具 | +2.29 | 多连消奖励 + 道具奖励叠加 |
+| 5 | L1 非目标 4连消 → column 道具 | +1.24 | 非目标但有多连消奖励 |
+| 6 | L1 目标 3连消 | +0.58 | 普通目标消除，为凑 L2 铺垫 |
+| 7 | L1 非目标 3连消 | -0.12 | 轻微负收益，避免浪费步数 |
+| — | 空交换（无消除） | -0.23 | 步数惩罚 + 空挥惩罚 |
+
+**关键设计取舍：**
+- L2 目标消除（+5.4）>> L1 目标 5 连消（+3.8）：直接消 L2 仍优先于凑大连消
+- 目标 4连（+2.3）vs 目标 3连（+0.6）：差距从 +0.7 扩大到 **+1.7**，模型现在有足够信号学会识别多连消机会
+- 非目标 5连（+2.4）> 目标 3连（+0.6）：生成 color 道具的价值高于普通目标消除，避免模型死守目标格忽视大连消机会
 
 ## 七、评估模型
 
