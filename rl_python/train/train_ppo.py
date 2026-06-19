@@ -21,6 +21,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from env.match3_env import Match3Env
+from train.features import Match3CnnExtractor
 
 
 def mask_fn(env: gym.Env) -> np.ndarray:
@@ -58,7 +59,9 @@ def main():
     eval_env = ActionMasker(Match3Env(curriculum_level=args.curriculum, seed=args.seed + 1000), mask_fn)
 
     policy_kwargs = dict(
-        net_arch=dict(pi=[256, 128], vf=[256, 128]),
+        features_extractor_class=Match3CnnExtractor,
+        features_extractor_kwargs=dict(features_dim=256),
+        net_arch=dict(pi=[128], vf=[128]),
     )
 
     model = MaskablePPO(

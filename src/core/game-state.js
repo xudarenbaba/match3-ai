@@ -63,7 +63,7 @@ export function checkVictory(state, taskTarget = 4) {
 
 export function executeMove(state, from, to) {
   if (state.over) return { ok: false, reason: '本局已结束' };
-  const result = trySwap(state.board, from, to, {}, state.layout);
+  const result = trySwap(state.board, from, to, {}, state.layout, state.targetShapes);
 
   state.score += result.totalScore;
   state.chainScoreTotal += result.chainScore;
@@ -80,6 +80,13 @@ export function executeMove(state, from, to) {
   }
 
   return { ok: true, result };
+}
+
+export function simulateSwapWithTargets(board, from, to, options = {}, layout = null, targetShapes = null) {
+  const sim = cloneBoard(board);
+  const result = trySwap(sim, from, to, options, layout, targetShapes);
+  if (options.includeFinalBoard) return { ...result, finalBoard: cloneBoard(sim) };
+  return result;
 }
 
 export function commitPreparedMove(state, from, to, preparedResult, finalBoard) {

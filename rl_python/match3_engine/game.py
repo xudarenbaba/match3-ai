@@ -101,7 +101,7 @@ def _apply_task_progress(state: GameState, result: dict) -> None:
 def execute_move(state: GameState, rng: random.Random, fr: dict, to: dict) -> dict:
     if state.over:
         return {"ok": False, "reason": "game over"}
-    result = try_swap(state.board, rng, fr, to, state.layout)
+    result = try_swap(state.board, rng, fr, to, state.layout, state.target_shapes)
     result["last_action_before"] = state.last_action
     state.score += result["total_score"]
     state.chain_score_total += result["chain_score"]

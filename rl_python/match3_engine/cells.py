@@ -47,9 +47,15 @@ def create_powerup_cell(
 
 
 def create_cell(rng: random.Random) -> Cell:
+    """顶部掉落补充用：2.5% 概率道具，否则只生成等级 1 普通格（对齐 JS createCell）。"""
     if rng.random() < POWERUP_SPAWN_RATE:
         return create_powerup_cell(rng)
-    return create_normal_cell(rng)
+    return create_normal_cell(rng, level=1)
+
+
+def create_initial_cell(rng: random.Random) -> Cell:
+    """初始化棋盘用：只生成等级 1 的普通格，不生成道具（对齐 JS createInitialCell）。"""
+    return create_normal_cell(rng, level=1)
 
 
 def is_powerup(cell: Optional[Cell]) -> bool:

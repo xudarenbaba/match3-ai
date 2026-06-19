@@ -1,7 +1,7 @@
 ROWS = 10
 COLS = 10
 SHAPES = ["circle", "square", "triangle", "star"]
-POWERUP_TYPES = ["column", "bomb", "color"]
+POWERUP_TYPES = ["row", "column", "bomb", "color"]
 MAX_STEPS = 100
 INITIAL_FROZEN_RATIO = 0.12
 POWERUP_SPAWN_RATE = 0.025

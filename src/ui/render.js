@@ -140,6 +140,7 @@ function renderGrid(
 }
 
 function powerupLabel(type) {
+  if (type === 'row') return '横';
   if (type === 'column') return '列';
   if (type === 'bomb') return '炸';
   if (type === 'color') return '同';
@@ -265,11 +266,15 @@ async function onAiMove() {
   let previousBoard = preview.afterSwapBoard ? cloneBoard(preview.afterSwapBoard) : cloneBoard(state.board);
   for (const step of preview.steps || []) {
     if (step.type === 'powerup' && step.boardAfterPowerup) {
+      // upgraded: 升到 L2 的格（高亮）；cleared: 升到 L3 消失的格（高亮）
       const powerCells = [];
-      const unfrozenCells = [];
-      for (const ev of step.events || []) powerCells.push(...(ev.targets || []));
-      for (const ev of step.events || []) unfrozenCells.push(...(ev.unfrozen || []));
-      renderGrid(step.boardAfterPowerup, { powerCells, unfrozenCells, phaseClass: 'phase-power' });
+      for (const ev of step.events || []) {
+        powerCells.push(...(ev.upgraded || []));
+        powerCells.push(...(ev.cleared || []));
+        // bomb 兼容：targets 里是被消除格
+        if (!ev.upgraded && !ev.cleared) powerCells.push(...(ev.targets || []));
+      }
+      renderGrid(step.boardAfterPowerup, { powerCells, phaseClass: 'phase-power' });
       await sleep(TIMINGS.showPowerup);
       previousBoard = cloneBoard(step.boardAfterPowerup);
       continue;

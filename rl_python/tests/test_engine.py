@@ -82,31 +82,41 @@ def test_all_layouts():
         assert mask.sum() > 0 or True  # 某些极端布局可能无有效动作，不强制
 
 
-def test_4_combo_generates_column_powerup():
-    """4连消应生成 column 道具。"""
+def test_4_combo_generates_powerup():
+    """横向4连消应生成 row 道具；纵向4连消应生成 column 道具。"""
     from match3_engine.match import find_matches, pick_merge_positions, apply_merges
     from match3_engine.cells import NormalCell
     from match3_engine.board import create_empty_board
 
     rng = random.Random(0)
+
+    # 横向4连 → row 道具
     board = create_empty_board()
-    # 手动放置 4个同shape同level相邻格子（横向）
     for c in range(4):
         board[5][c] = NormalCell(shape="circle", level=1)
-
     matches = find_matches(board)
     assert len(matches) == 1
-    assert len(matches[0]["cells"]) == 4
-
+    assert matches[0]["direction"] == "row"
     positions = pick_merge_positions(matches, None, None)
-    merged = apply_merges(board, matches, positions, rng)
-
-    # 合并位应放 column 道具
+    apply_merges(board, matches, positions, rng)
     pos = positions[0]
     result_cell = board[pos["r"]][pos["c"]]
-    assert result_cell is not None
-    assert result_cell.kind == "powerup"
-    assert result_cell.powerup_type == "column", f"Expected column, got {result_cell.powerup_type}"
+    assert result_cell is not None and result_cell.kind == "powerup"
+    assert result_cell.powerup_type == "row", f"Expected row, got {result_cell.powerup_type}"
+
+    # 纵向4连 → column 道具
+    board2 = create_empty_board()
+    for r in range(4):
+        board2[r][5] = NormalCell(shape="circle", level=1)
+    matches2 = find_matches(board2)
+    assert len(matches2) == 1
+    assert matches2[0]["direction"] == "col"
+    positions2 = pick_merge_positions(matches2, None, None)
+    apply_merges(board2, matches2, positions2, rng)
+    pos2 = positions2[0]
+    result_cell2 = board2[pos2["r"]][pos2["c"]]
+    assert result_cell2 is not None and result_cell2.kind == "powerup"
+    assert result_cell2.powerup_type == "column", f"Expected column, got {result_cell2.powerup_type}"
 
 
 def test_5_combo_generates_color_powerup():
@@ -145,12 +155,12 @@ def test_5_combo_generates_color_powerup():
 
 
 def test_layout_mask_in_observation():
-    """observation 中 layout_mask channel（28）应正确反映布局。"""
+    """observation 中 layout_mask channel（29）应正确反映布局。"""
     rng = random.Random(0)
     state = create_game_state(rng, layout_name="cross")
     obs = build_observation(state)
     layout = state.layout
-    layout_ch = obs["board"][28]  # channel 28
+    layout_ch = obs["board"][29]  # channel 29（新通道数：row道具占12，layout_mask移至29）
     for r in range(10):
         for c in range(10):
             expected = 1.0 if layout[r][c] else 0.0

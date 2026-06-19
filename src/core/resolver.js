@@ -2,7 +2,7 @@ import { cloneBoard } from './board.js';
 import { isPowerup } from './cells.js';
 import { findMatches, pickMergePositions, applyMerges } from './match.js';
 import { applyGravityAndRefill } from './gravity.js';
-import { powerupTargets, unfreezeTargets } from './powerup.js';
+import { applyPowerupEffect } from './powerup.js';
 
 export function swapCells(board, from, to) {
   const tmp = board[from.r][from.c];
@@ -10,7 +10,7 @@ export function swapCells(board, from, to) {
   board[to.r][to.c] = tmp;
 }
 
-export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}, layout = null) {
+export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}, layout = null, targetShapes = null) {
   const captureBoards = Boolean(options.captureBoards);
   let totalScore = 0;
   let chainScore = 0;
@@ -56,13 +56,7 @@ export function resolveBoard(board, swapFrom = null, swapTo = null, options = {}
   return { totalScore, chainScore, specialGained, steps, hadMatch };
 }
 
-function resolvePowerupSwap(board, from, to, captureBoards = false, layout = null) {
-  const powerEvents = [];
-  const taskFromPowerup = {};
-  let totalScore = 0;
-  let chainScore = 0;
-  const steps = [];
-
+function resolvePowerupSwap(board, from, to, captureBoards = false, layout = null, targetShapes = null) {
   const first = board[from.r][from.c];
   const second = board[to.r][to.c];
   const powerups = [];
@@ -70,57 +64,46 @@ function resolvePowerupSwap(board, from, to, captureBoards = false, layout = nul
   if (isPowerup(second)) powerups.push({ pos: to, partner: from, cell: second });
 
   if (powerups.length === 0) {
-    return {
-      usedPowerup: false,
-      totalScore: 0,
-      chainScore: 0,
-      specialGained: {},
-      taskFromPowerup,
-      steps,
-      hadMatch: false,
-    };
+    return { usedPowerup: false, totalScore: 0, chainScore: 0, specialGained: {}, taskFromPowerup: {}, steps: [], hadMatch: false };
   }
 
-  for (const pw of powerups) {
-    const targets = powerupTargets(board, pw.pos, pw.partner, layout);
-    const unfrozen = unfreezeTargets(board, targets);
-    const removedCount = targets.length;
-    if (removedCount === 0) continue;
+  const combinedSpecial = {};
+  const powerEvents = [];
+  let totalScore = 0;
+  let anyTriggered = false;
 
-    targets.forEach((p) => {
-      board[p.r][p.c] = null;
+  for (const pw of powerups) {
+    const { targets, specialGained, clearedByShape, upgraded, cleared } =
+      applyPowerupEffect(board, pw.pos, pw.partner, layout, targetShapes);
+
+    // 行/列/同道具：targets 可能为空（空行/列），但只要是道具就算触发
+    anyTriggered = true;
+
+    Object.entries(specialGained).forEach(([shape, n]) => {
+      combinedSpecial[shape] = (combinedSpecial[shape] || 0) + n;
     });
-    totalScore += removedCount;
-    if (removedCount >= 9) {
-      taskFromPowerup[pw.cell.shape] = (taskFromPowerup[pw.cell.shape] || 0) + 1;
-    }
+    // bomb 或升级消除的格子才计分
+    totalScore += cleared.length + Object.values(clearedByShape).reduce((a, b) => a + b, 0);
 
     powerEvents.push({
       powerupType: pw.cell.powerupType,
       shape: pw.cell.shape,
-      removedCount,
       targets,
-      unfrozen,
+      upgraded,
+      cleared,
       triggerAt: pw.pos,
     });
   }
 
-  if (powerEvents.length === 0) {
-    return {
-      usedPowerup: false,
-      totalScore: 0,
-      chainScore: 0,
-      specialGained: {},
-      taskFromPowerup,
-      steps,
-      hadMatch: false,
-    };
+  if (!anyTriggered) {
+    return { usedPowerup: false, totalScore: 0, chainScore: 0, specialGained: {}, taskFromPowerup: {}, steps: [], hadMatch: false };
   }
 
+  const steps = [];
   steps.push({
     type: 'powerup',
     events: powerEvents,
-    score: powerEvents.reduce((acc, e) => acc + e.removedCount, 0),
+    score: totalScore,
     boardAfterPowerup: captureBoards ? cloneBoard(board) : null,
   });
 
@@ -130,49 +113,43 @@ function resolvePowerupSwap(board, from, to, captureBoards = false, layout = nul
     boardAfterRefill: captureBoards ? cloneBoard(board) : null,
   });
 
-  const chain = resolveBoard(board, from, to, { captureBoards }, layout);
+  const chain = resolveBoard(board, from, to, { captureBoards }, layout, targetShapes);
   totalScore += chain.totalScore;
-  chainScore += chain.totalScore;
+
+  Object.entries(chain.specialGained).forEach(([shape, n]) => {
+    combinedSpecial[shape] = (combinedSpecial[shape] || 0) + n;
+  });
 
   steps.push(...chain.steps);
+
   return {
     usedPowerup: true,
     totalScore,
-    chainScore,
-    specialGained: chain.specialGained,
-    taskFromPowerup,
+    chainScore: chain.totalScore,
+    specialGained: combinedSpecial,
+    // 任务分统一只走 specialGained，taskFromPowerup 置空避免重复计分
+    taskFromPowerup: {},
     steps,
     hadMatch: chain.hadMatch || true,
   };
 }
 
-export function trySwap(board, from, to, options = {}, layout = null) {
+export function trySwap(board, from, to, options = {}, layout = null, targetShapes = null) {
   swapCells(board, from, to);
   const afterSwapBoard = options.captureBoards ? cloneBoard(board) : null;
 
-  const powerRes = resolvePowerupSwap(board, from, to, options.captureBoards, layout);
+  const powerRes = resolvePowerupSwap(board, from, to, options.captureBoards, layout, targetShapes);
   if (powerRes.usedPowerup) {
-    return {
-      success: true,
-      afterSwapBoard,
-      ...powerRes,
-    };
+    return { success: true, afterSwapBoard, ...powerRes };
   }
 
-  const normalRes = resolveBoard(board, from, to, options, layout);
-  return {
-    success: true,
-    afterSwapBoard,
-    taskFromPowerup: {},
-    ...normalRes,
-  };
+  const normalRes = resolveBoard(board, from, to, options, layout, targetShapes);
+  return { success: true, afterSwapBoard, taskFromPowerup: {}, ...normalRes };
 }
 
-export function simulateSwap(board, from, to, options = {}, layout = null) {
+export function simulateSwap(board, from, to, options = {}, layout = null, targetShapes = null) {
   const sim = cloneBoard(board);
-  const result = trySwap(sim, from, to, options, layout);
-  if (options.includeFinalBoard) {
-    return { ...result, finalBoard: cloneBoard(sim) };
-  }
+  const result = trySwap(sim, from, to, options, layout, targetShapes);
+  if (options.includeFinalBoard) return { ...result, finalBoard: cloneBoard(sim) };
   return result;
 }

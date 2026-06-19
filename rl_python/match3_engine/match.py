@@ -31,7 +31,7 @@ def find_matches(board: Board) -> List[dict]:
                     break
                 end += 1
             if end - c >= 3:
-                matches.append({"cells": [{"r": r, "c": i} for i in range(c, end)], "shape": cell.shape, "level": cell.level})
+                matches.append({"cells": [{"r": r, "c": i} for i in range(c, end)], "shape": cell.shape, "level": cell.level, "direction": "row"})
             c = end
 
     for c in range(COLS):
@@ -54,7 +54,7 @@ def find_matches(board: Board) -> List[dict]:
                     break
                 end += 1
             if end - r >= 3:
-                matches.append({"cells": [{"r": i, "c": c} for i in range(r, end)], "shape": cell.shape, "level": cell.level})
+                matches.append({"cells": [{"r": i, "c": c} for i in range(r, end)], "shape": cell.shape, "level": cell.level, "direction": "col"})
             r = end
 
     if len(matches) <= 1:
@@ -84,8 +84,11 @@ def find_matches(board: Board) -> List[dict]:
     for i, m in enumerate(matches):
         root = find(i)
         if root not in groups:
-            groups[root] = {"shape": m["shape"], "level": m["level"], "cells": []}
+            groups[root] = {"shape": m["shape"], "level": m["level"], "direction": m["direction"], "cells": []}
         g = groups[root]
+        # 不同方向合并（L/T 型）时标记为 cross
+        if g["direction"] != m["direction"]:
+            g["direction"] = "cross"
         seen = {(p["r"], p["c"]) for p in g["cells"]}
         for p in m["cells"]:
             key = (p["r"], p["c"])
@@ -132,15 +135,17 @@ def pick_merge_positions(matches: List[dict], swap_from: Optional[dict], swap_to
 
 def _merged_result_cell(m: dict, rng: random.Random):
     """
-    根据合并数量决定在 merge position 生成什么格子：
-      3连 → level+1 的普通格（原有行为）
-      4连 → 列（column）道具
+    根据合并数量和方向决定在 merge position 生成什么格子：
+      3连 → level+1 的普通格
+      4连横向 → 行（row）道具
+      4连纵向/L型 → 列（column）道具
       5连+ → 同（color）道具
-      L2/L3 合并（任意数量）→ 计任务分，合并位清空
+      L2 合并（任意数量）→ 计任务分，合并位清空
     """
     n = len(m["cells"])
     shape = m["shape"]
     level = m["level"]
+    direction = m.get("direction", "row")
 
     if level >= 2:
         return None
@@ -148,7 +153,8 @@ def _merged_result_cell(m: dict, rng: random.Random):
     if n >= 5:
         return create_powerup_cell(rng, shape, "color")
     elif n == 4:
-        return create_powerup_cell(rng, shape, "column")
+        powerup_type = "row" if direction == "row" else "column"
+        return create_powerup_cell(rng, shape, powerup_type)
     else:
         return create_normal_cell(rng, shape, level + 1)
 

@@ -7,7 +7,7 @@ export const SHAPE_NAMES = {
   triangle: '三角形',
   star: '五角星',
 };
-export const POWERUP_TYPES = ['column', 'bomb', 'color'];
+export const POWERUP_TYPES = ['row', 'column', 'bomb', 'color'];
 export const MAX_STEPS = 100;
 export const INITIAL_FROZEN_RATIO = 0.12;
 export const POWERUP_SPAWN_RATE = 0.025;

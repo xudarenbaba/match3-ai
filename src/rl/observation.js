@@ -1,11 +1,17 @@
 import { ROWS, COLS, SHAPES, POWERUP_TYPES } from '../core/constants.js';
 
-// 单帧 board 通道数（原 28 + 1 个 layout_mask = 29）
-const BOARD_CHANNELS = 29;
+// 单帧 board 通道数（28 形状/道具/冻结 + 1 row道具 + 1 layout_mask = 30）
+// 通道布局与 rl_python/env/observation.py 严格对齐：
+//   0-11  : shape×level 一热（4 shape × 3 level）
+//   12-15 : 道具类型（row/column/bomb/color）
+//   16    : 冻结标志
+//   17-28 : 目标 shape×level 一热（仅目标 shape）
+//   29    : layout_mask
+const BOARD_CHANNELS = 30;
 // 帧堆叠数，与 Python 侧 FRAME_STACK 保持一致
 export const FRAME_STACK = 3;
 // 堆叠后的 board 通道数
-export const STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK; // 87
+export const STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK; // 90
 const GLOBAL_DIM = 15;
 
 export const OBS_BOARD_CHANNELS = STACKED_BOARD_CHANNELS;
@@ -13,12 +19,12 @@ export const OBS_GLOBAL_DIM = GLOBAL_DIM;
 
 /**
  * 构建单帧棋盘观测。
- * 通道说明（29 个）：
+ * 通道说明（30 个）：
  *   0-11  : shape×level 一热编码（4 shape × 3 level）
- *   12-14 : 道具类型（column/bomb/color）
- *   15    : 冻结标志
- *   16-27 : 目标 shape×level 一热（仅目标 shape）
- *   28    : layout_mask（1=活跃格，0=void 格）
+ *   12-15 : 道具类型（row/column/bomb/color）
+ *   16    : 冻结标志
+ *   17-28 : 目标 shape×level 一热（仅目标 shape）
+ *   29    : layout_mask（1=活跃格，0=void 格）
  */
 export function buildObservation(state) {
   const board = new Array(BOARD_CHANNELS * ROWS * COLS).fill(0);
@@ -29,10 +35,10 @@ export function buildObservation(state) {
     for (let c = 0; c < COLS; c++) {
       const base = r * COLS + c;
 
-      // 通道 28：layout_mask
+      // 通道 29：layout_mask
       const isActive = !layout || layout[r][c];
       if (isActive) {
-        board[28 * ROWS * COLS + base] = 1;
+        board[29 * ROWS * COLS + base] = 1;
       } else {
         continue; // void 格其他通道均为 0
       }
@@ -53,16 +59,16 @@ export function buildObservation(state) {
       }
 
       if (cell.frozen) {
-        board[15 * ROWS * COLS + base] = 1;
+        board[16 * ROWS * COLS + base] = 1;
       }
 
       if (targetSet.has(cell.shape)) {
         const si = SHAPES.indexOf(cell.shape);
         if (si >= 0) {
           if (cell.kind === 'normal' && cell.level >= 1 && cell.level <= 3) {
-            board[(16 + si * 3 + (cell.level - 1)) * ROWS * COLS + base] = 1;
+            board[(17 + si * 3 + (cell.level - 1)) * ROWS * COLS + base] = 1;
           } else if (cell.kind === 'powerup') {
-            board[(16 + si * 3 + 2) * ROWS * COLS + base] = 1;
+            board[(17 + si * 3 + 2) * ROWS * COLS + base] = 1;
           }
         }
       }

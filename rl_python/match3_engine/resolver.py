@@ -7,7 +7,7 @@ from .board import Board, clone_board
 from .cells import is_powerup
 from .match import find_matches, pick_merge_positions, apply_merges
 from .gravity import apply_gravity_and_refill
-from .powerup import powerup_targets, unfreeze_targets
+from .powerup import powerup_upgrade_targets
 
 
 def swap_cells(board: Board, fr: dict, to: dict) -> None:
@@ -20,13 +20,14 @@ def resolve_board(
     swap_from: Optional[dict] = None,
     swap_to: Optional[dict] = None,
     layout: Optional[list] = None,
+    target_shapes: Optional[list] = None,
 ) -> dict:
     total_score = 0
     chain_score = 0
     is_first = True
     special_gained: dict = {}
     cleared_by_shape: dict = {}
-    merge_events: list = []  # 收集所有合并事件，供 reward 使用
+    merge_events: list = []
     had_match = False
 
     while True:
@@ -64,7 +65,12 @@ def resolve_board(
 
 
 def _resolve_powerup_swap(
-    board: Board, rng: random.Random, fr: dict, to: dict, layout: Optional[list] = None
+    board: Board,
+    rng: random.Random,
+    fr: dict,
+    to: dict,
+    layout: Optional[list] = None,
+    target_shapes: Optional[list] = None,
 ) -> dict:
     first = board[fr["r"]][fr["c"]]
     second = board[to["r"]][to["c"]]
@@ -79,59 +85,81 @@ def _resolve_powerup_swap(
             "total_score": 0,
             "chain_score": 0,
             "special_gained": {},
+            "cleared_by_shape": {},
             "had_match": False,
             "used_powerup": False,
             "task_from_powerup": {},
         }
 
     total_score = 0
-    task_from_powerup: dict = {}
+    combined_special: dict = {}
+    combined_cleared: dict = {}
     triggered = False
 
     for pw in powerups:
-        targets = powerup_targets(board, pw["pos"], pw["partner"], layout)
-        unfreeze_targets(board, targets)
-        removed = len(targets)
-        if removed == 0:
+        _targets, sp_gained, cleared = powerup_upgrade_targets(
+            board, pw["pos"], pw["partner"], layout, target_shapes
+        )
+        if not _targets and pw["cell"].powerup_type not in ("row", "column", "color", "bomb"):
             continue
         triggered = True
-        for p in targets:
-            board[p["r"]][p["c"]] = None
-        total_score += removed
-        if removed >= 9:
-            task_from_powerup[pw["cell"].shape] = task_from_powerup.get(pw["cell"].shape, 0) + 1
+
+        # bomb 逻辑：直接统计消除格数（_upgrade_targets 已经把格子删了）
+        # row/column/color 逻辑：升级后 L2→L3 消失的格子也已经删了
+        for shape, n in sp_gained.items():
+            combined_special[shape] = combined_special.get(shape, 0) + n
+        for shape, n in cleared.items():
+            combined_cleared[shape] = combined_cleared.get(shape, 0) + n
+        total_score += sum(cleared.values())
 
     if not triggered:
         return {
             "total_score": 0,
             "chain_score": 0,
             "special_gained": {},
+            "cleared_by_shape": {},
             "had_match": False,
             "used_powerup": False,
             "task_from_powerup": {},
         }
 
+    # 升级/消除后重力补位
     apply_gravity_and_refill(board, rng, layout)
-    chain = resolve_board(board, rng, fr, to, layout)
+
+    # 补位后可能触发新的普通三连
+    chain = resolve_board(board, rng, fr, to, layout, target_shapes)
     total_score += chain["total_score"]
+
+    for shape, n in chain["special_gained"].items():
+        combined_special[shape] = combined_special.get(shape, 0) + n
+    for shape, n in chain["cleared_by_shape"].items():
+        combined_cleared[shape] = combined_cleared.get(shape, 0) + n
+
     return {
         "total_score": total_score,
         "chain_score": chain["total_score"],
-        "special_gained": chain["special_gained"],
-        "cleared_by_shape": chain.get("cleared_by_shape", {}),
+        "special_gained": combined_special,
+        "cleared_by_shape": combined_cleared,
+        "merge_events": chain.get("merge_events", []),
         "had_match": chain["had_match"] or True,
         "used_powerup": True,
-        "task_from_powerup": task_from_powerup,
+        # 任务分统一只走 special_gained，task_from_powerup 置空避免重复计分
+        "task_from_powerup": {},
     }
 
 
 def try_swap(
-    board: Board, rng: random.Random, fr: dict, to: dict, layout: Optional[list] = None
+    board: Board,
+    rng: random.Random,
+    fr: dict,
+    to: dict,
+    layout: Optional[list] = None,
+    target_shapes: Optional[list] = None,
 ) -> dict:
     swap_cells(board, fr, to)
-    power_res = _resolve_powerup_swap(board, rng, fr, to, layout)
+    power_res = _resolve_powerup_swap(board, rng, fr, to, layout, target_shapes)
     if power_res["used_powerup"]:
         return power_res
-    normal_res = resolve_board(board, rng, fr, to, layout)
+    normal_res = resolve_board(board, rng, fr, to, layout, target_shapes)
     normal_res["task_from_powerup"] = {}
     return normal_res

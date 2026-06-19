@@ -7,10 +7,11 @@
 ## 一、核心特性
 
 - **MaskablePPO 强化学习**：动作空间 180 维（90 横向 + 90 纵向相邻交换）
-- **多输入观测**：`board` 29 通道 × 3 帧堆叠 = 87 通道 × 10×10 棋盘 + `global` 15 维全局向量（当前帧）
+- **CNN 特征提取**：`board` 经两层 3×3 卷积提取空间结构，再与 `global` 拼接送入 MLP，显著提升对「局部 3 连/4 连机会」的识别能力
+- **多输入观测**：`board` 30 通道 × 3 帧堆叠 = 90 通道 × 10×10 棋盘 + `global` 15 维全局向量（当前帧）
 - **本地推理服务**：浏览器每回合请求 Python 服务获取 RL 推荐走法
 - **课程学习**：难度 1–3 逐步增加步数限制、任务目标与冻结格
-- **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（87 通道），使模型感知棋盘变化趋势
+- **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（90 通道），使模型感知棋盘变化趋势
 - **2-step lookahead 推理**：推理时对 top-K 候选动作各模拟一步，选择「即时奖励 + γ × 下一状态价值」最高的动作，解决死循环与短视问题，不需要重新训练模型
 - **训练防抖**：
   - 仅允许「有效交换」（能触发消除或道具）进入动作 mask
@@ -64,6 +65,8 @@ python train/train_ppo.py --curriculum 3 --timesteps 1500000 --n-envs 8 --save-d
 | `ent_coef` | `0.03` | 熵系数，增加探索避免早期收敛到次优策略 |
 | `gamma` | `0.99` | 折扣因子 |
 | `learning_rate` | `3e-4` | Adam 学习率 |
+| `features_extractor` | `Match3CnnExtractor` | board 两层 3×3 卷积（C→32→64）+ Linear(256)，global 直接拼接 |
+| `net_arch` | `pi=[128], vf=[128]` | CNN 后接的策略/价值 MLP（CNN 已提供主要特征） |
 
 训练产物说明：
 
@@ -142,18 +145,18 @@ python -m http.server 8080
 
 | 字段 | 形状 | 取值范围 | 说明 |
 |------|------|----------|------|
-| `board` | `(87, 10, 10)` | `[0, 1]` | 3 帧堆叠棋盘特征：29 通道/帧 × 3 帧，最旧帧在前，最新帧在后 |
+| `board` | `(90, 10, 10)` | `[0, 1]` | 3 帧堆叠棋盘特征：30 通道/帧 × 3 帧，最旧帧在前，最新帧在后 |
 | `global` | `(15,)` | `[0, 1]` | 当前帧全局标量特征（步数、分数、任务进度等） |
 
 **帧堆叠说明**：每次决策时将当前帧与前 2 帧的棋盘观测沿通道轴拼接，使模型能感知棋盘的变化趋势。历史帧不足时用零帧补齐。`global` 向量始终取最新帧，不堆叠。
 
-对应常量：`rl_python/env/observation.py` 中 `FRAME_STACK=3`、`BOARD_CHANNELS=29`、`STACKED_BOARD_CHANNELS=87`。
+对应常量：`rl_python/env/observation.py` 中 `FRAME_STACK=3`、`BOARD_CHANNELS=30`、`STACKED_BOARD_CHANNELS=90`。
 
 对应代码：`rl_python/env/observation.py`、`src/rl/observation.js`。
 
-### 3.2 单帧 `board` 通道（29 通道/帧，共 3 帧）
+### 3.2 单帧 `board` 通道（30 通道/帧，共 3 帧）
 
-棋盘为 10 行 × 10 列，每格在同一 `(r, c)` 位置可激活多个通道（例如普通格既占图形通道，也可能占冻结通道）。以下为单帧的通道定义，网络实际接收的是 3 帧按此顺序拼接的结果，共 87 通道。
+棋盘为 10 行 × 10 列，每格在同一 `(r, c)` 位置可激活多个通道。以下为单帧的通道定义，网络实际接收的是 3 帧按此顺序拼接的结果，共 90 通道。
 
 | 通道索引 | 名称 | 含义 |
 |----------|------|------|
@@ -161,23 +164,24 @@ python -m http.server 8080
 | 3–5 | `square` L1 / L2 / L3 | 方形普通格，等级 1–3 |
 | 6–8 | `triangle` L1 / L2 / L3 | 三角形普通格，等级 1–3 |
 | 9–11 | `star` L1 / L2 / L3 | 星形普通格，等级 1–3 |
-| 12 | `powerup_column` | 列消道具格 |
-| 13 | `powerup_bomb` | 九宫格炸弹道具格 |
-| 14 | `powerup_color` | 同形全消道具格 |
-| 15 | `frozen` | 该格被冻结（不可交换） |
-| 16 | `target_circle_L1` | 目标圆形，等级 1 |
-| 17 | `target_circle_L2` | 目标圆形，等级 2（当前最高级） |
-| 18 | `target_circle_L3` | 目标圆形，等级 3（含道具格，L3 格实际不再生成） |
-| 19 | `target_square_L1` | 目标方形，等级 1 |
-| 20 | `target_square_L2` | 目标方形，等级 2（当前最高级） |
-| 21 | `target_square_L3` | 目标方形，等级 3（含道具格） |
-| 22 | `target_triangle_L1` | 目标三角形，等级 1 |
-| 23 | `target_triangle_L2` | 目标三角形，等级 2（当前最高级） |
-| 24 | `target_triangle_L3` | 目标三角形，等级 3（含道具格） |
-| 25 | `target_star_L1` | 目标星形，等级 1 |
-| 26 | `target_star_L2` | 目标星形，等级 2（当前最高级） |
-| 27 | `target_star_L3` | 目标星形，等级 3（含道具格） |
-| 28 | `layout_mask` | 活跃格标志（1 = 有效格，0 = void 格） |
+| 12 | `powerup_row` | 行升级道具格（横向4连生成） |
+| 13 | `powerup_column` | 列升级道具格（纵向4连生成） |
+| 14 | `powerup_bomb` | 九宫格炸弹道具格 |
+| 15 | `powerup_color` | 同形升级道具格（5连+生成） |
+| 16 | `frozen` | 该格被冻结（不可交换） |
+| 17 | `target_circle_L1` | 目标圆形，等级 1 |
+| 18 | `target_circle_L2` | 目标圆形，等级 2（当前最高级） |
+| 19 | `target_circle_L3` | 目标圆形，等级 3（道具格占位） |
+| 20 | `target_square_L1` | 目标方形，等级 1 |
+| 21 | `target_square_L2` | 目标方形，等级 2（当前最高级） |
+| 22 | `target_square_L3` | 目标方形，等级 3 |
+| 23 | `target_triangle_L1` | 目标三角形，等级 1 |
+| 24 | `target_triangle_L2` | 目标三角形，等级 2（当前最高级） |
+| 25 | `target_triangle_L3` | 目标三角形，等级 3 |
+| 26 | `target_star_L1` | 目标星形，等级 1 |
+| 27 | `target_star_L2` | 目标星形，等级 2（当前最高级） |
+| 28 | `target_star_L3` | 目标星形，等级 3 |
+| 29 | `layout_mask` | 活跃格标志（1 = 有效格，0 = void 格） |
 
 空位（`null`）不激活任何通道。
 
@@ -212,6 +216,23 @@ python -m http.server 8080
 | 2 | 120 | 3 分/图形 | 2 种 | 是 |
 | 3 | 100 | 4 分/图形 | 2 种 | 是 |
 
+### 3.6 道具系统
+
+道具由 L1 的多连消生成，效果为「升级」而非「整片消除」：
+
+| 道具 | 生成条件 | 效果 |
+|------|----------|------|
+| **行（row）** | 横向 4 连消 | 该行其余普通格等级 +1；升到 L2 的目标格直接计任务分并消失 |
+| **列（column）** | 纵向 4 连消 | 该列其余普通格等级 +1；升到 L2 的目标格直接计任务分并消失 |
+| **同（color）** | 5 连+消 | 全图相同形状的普通格等级 +1；升到 L2 的目标格直接计任务分并消失 |
+| **炸（bomb）** | 随机掉落 | 九宫格范围直接消除（保留原消除逻辑） |
+
+> 升级说明：L1→L2 保留在原位；L2→升级即视为完成该格目标（计 1 个 `special_gained`）并消失。升级后触发重力补位与连锁。
+>
+> 道具生成的任务分统一只走 `special_gained`，不重复计入 `task_from_powerup`。
+
+**关键不变量（格子生成分布）**：顶部掉落补充用 `create_cell`（97.5% L1 普通格 + 2.5% 道具），初始棋盘用 `create_initial_cell`（纯 L1、无道具）。JS 与 Python 两侧严格一致，确保训练分布 = 实际游戏分布。
+
 ## 四、项目目录与文件职责
 
 ```text
@@ -228,13 +249,13 @@ match3-ai/
 │  │  ├─ board.js                     # 棋盘创建、克隆、边界判断
 │  │  ├─ gravity.js                   # 消除后掉落补充、随机洗牌、冻结格生成
 │  │  ├─ match.js                     # 三连匹配检测、合并升级、道具生成
-│  │  ├─ powerup.js                   # 三种道具（列消/炸弹/同形）作用范围与解冻
+│  │  ├─ powerup.js                   # 四种道具（行/列升级、炸弹消除、同形升级）效果计算
 │  │  ├─ resolver.js                  # 交换后整步结算（消除链、道具连锁、得分）
 │  │  └─ game-state.js                # 对局状态创建、提交移动、记录 lastAction
 │  ├─ actions/
 │  │  └─ encoding.js                  # 动作编解码（180 维）、相邻交换枚举
 │  ├─ rl/
-│  │  ├─ observation.js               # JS 侧观测编码（29 通道单帧 + 15 维 global；帧堆叠由 rl-policy.js 维护）
+│  │  ├─ observation.js               # JS 侧观测编码（30 通道单帧 + 15 维 global；帧堆叠由 rl-policy.js 维护）
 │  │  └─ reward.js                    # JS 侧奖励定义（与 Python 训练奖励对齐参考）
 │  ├─ ai/
 │  │  ├─ rl-policy.js                 # 调用推理服务 /health、/predict；序列化局面 JSON
@@ -257,16 +278,19 @@ match3-ai/
    ├─ env/
    │  ├─ __init__.py                  # 包导出
    │  ├─ match3_env.py                # Gymnasium 环境（reset/step/action_masks/课程学习）
-   │  ├─ observation.py               # 训练观测编码（单帧 29ch；堆叠后 87ch × 3帧 + global 15d）
+   │  ├─ observation.py               # 训练观测编码（单帧 30ch；堆叠后 90ch × 3帧 + global 15d）
    │  └─ reward.py                    # 训练奖励（消除分、任务分、空转/重复动作惩罚）
    ├─ train/
    │  ├─ train_ppo.py                 # MaskablePPO 训练入口（checkpoint + eval 回调）
+   │  ├─ features.py                  # Match3CnnExtractor 自定义 CNN 特征提取器
    │  └─ eval.py                      # 模型评估（胜率 / 平均分 / 平均回报）
    ├─ serve/
    │  ├─ state_codec.py               # 前端 JSON ↔ Python GameState 转换
    │  └─ predict_server.py            # HTTP 推理 API（帧堆叠 + 2-step lookahead）
    ├─ tests/
    │  ├─ test_engine.py               # 引擎与环境冒烟测试（步进、观测形状）
+   │  ├─ test_parity.py               # JS/Python 引擎对拍测试（需 node）
+   │  ├─ parity_js.mjs                # 对拍 JS 侧输出脚本
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
    └─ runs/                           # 训练产物（部分已提交 git，见下方说明）
        ├─ ppo_match3_v1/               # v1 模型（旧合并规则下训练，建议重训覆盖）
@@ -278,8 +302,8 @@ match3-ai/
 **训练阶段（Python 内闭环）：**
 
 1. `Match3Env.reset()` 按课程难度创建新局，初始化帧缓冲（`_frame_buffer`）
-2. `build_observation()` 生成单帧 `{"board"(29ch), "global"}`，压入帧缓冲
-3. `stack_observations()` 将最近 3 帧拼接为 `{"board"(87ch), "global"}`
+2. `build_observation()` 生成单帧 `{"board"(30ch), "global"}`，压入帧缓冲
+3. `stack_observations()` 将最近 3 帧拼接为 `{"board"(90ch), "global"}`
 4. 模型根据堆叠 `obs + action_mask` 选择动作
 5. `step(action)` 调用引擎执行交换与结算，新帧压入缓冲
 6. `compute_reward()` 计算奖励并进入下一步

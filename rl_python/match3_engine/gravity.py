@@ -4,7 +4,7 @@ import random
 from typing import Optional
 
 from .board import Board
-from .cells import create_cell
+from .cells import create_cell, create_initial_cell
 from .constants import ROWS, COLS, INITIAL_FROZEN_RATIO
 from .match import find_matches
 
@@ -41,7 +41,7 @@ def reshuffle_board(
                 if layout and not layout[r][c]:
                     board[r][c] = None  # void 格永远为 None
                 else:
-                    board[r][c] = create_cell(rng)
+                    board[r][c] = create_initial_cell(rng)  # 初始只生成 L1，无道具（对齐 JS）
         if not find_matches(board):
             return True
     return False

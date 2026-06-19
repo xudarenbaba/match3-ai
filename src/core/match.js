@@ -30,7 +30,7 @@ export function findMatches(board) {
       if (end - c >= 3) {
         const cells = [];
         for (let i = c; i < end; i++) cells.push({ r, c: i });
-        matches.push({ cells, shape: cell.shape, level: cell.level });
+        matches.push({ cells, shape: cell.shape, level: cell.level, direction: 'row' });
       }
       c = end;
     }
@@ -61,7 +61,7 @@ export function findMatches(board) {
       if (end - r >= 3) {
         const cells = [];
         for (let i = r; i < end; i++) cells.push({ r: i, c });
-        matches.push({ cells, shape: cell.shape, level: cell.level });
+        matches.push({ cells, shape: cell.shape, level: cell.level, direction: 'col' });
       }
       r = end;
     }
@@ -94,10 +94,13 @@ export function findMatches(board) {
       groups.set(root, {
         shape: matches[i].shape,
         level: matches[i].level,
+        direction: matches[i].direction,
         cells: [],
       });
     }
     const g = groups.get(root);
+    // 不同方向合并（L/T 型）时标记为 cross
+    if (g.direction !== matches[i].direction) g.direction = 'cross';
     for (const p of matches[i].cells) {
       if (!g.cells.some((x) => x.r === p.r && x.c === p.c)) g.cells.push(p);
     }
@@ -166,20 +169,20 @@ export function pickMergePositions(matches, swapFrom, swapTo) {
  */
 function mergedResultCell(m) {
   const n = m.cells.length;
-  const { shape, level } = m;
+  const { shape, level, direction } = m;
 
   if (level >= 2) {
-    // L2/L3 合并：计任务分，合并位清空
+    // L2 合并：计任务分，合并位清空
     return null;
   }
 
-  // L1 合并，根据连消数生成不同结果
+  // L1 合并，根据连消数和方向生成不同结果
   if (n >= 5) {
-    // 5连+：生成"同"（color）道具
+    // 5连+：生成"同"（color）道具，横纵均可
     return createPowerupCell(shape, 'color');
   } else if (n === 4) {
-    // 4连：生成"列"（column）道具
-    return createPowerupCell(shape, 'column');
+    // 4连：横向→行（row）道具，纵向→列（column）道具，L/T 型→列道具
+    return createPowerupCell(shape, direction === 'row' ? 'row' : 'column');
   } else {
     // 3连：level+1 普通格
     return createNormalCell(shape, level + 1);

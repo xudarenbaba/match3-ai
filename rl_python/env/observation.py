@@ -5,23 +5,24 @@ import numpy as np
 from match3_engine.constants import ROWS, COLS, SHAPES, POWERUP_TYPES
 from match3_engine.game import GameState
 
-# 单帧 board 通道数（原 28 + 1 个 layout_mask = 29）
-BOARD_CHANNELS = 29
+# 单帧 board 通道数（28 形状/道具/冻结 + 1 layout_mask + 1 row道具通道 = 30）
+# 新增 powerup_row 通道（原 column/bomb/color 占 12-14，现 row/column/bomb/color 占 12-15）
+BOARD_CHANNELS = 30
 # 帧堆叠数（当前帧 + 前 N-1 帧）
 FRAME_STACK = 3
 # 堆叠后送入网络的 board 通道数
-STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK  # 87
+STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK  # 90
 GLOBAL_DIM = 15
 
 
 def build_observation(state: GameState) -> dict:
-    """构建单帧观测，board shape=(29,10,10)，global shape=(15,)。
-    通道说明（29 个）：
+    """构建单帧观测，board shape=(30,10,10)，global shape=(15,)。
+    通道说明（30 个）：
       0-11  : shape×level 一热编码（4 shape × 3 level）
-      12-14 : 道具类型（column/bomb/color）
-      15    : 冻结标志
-      16-27 : 目标 shape×level 一热（与通道 0-11 相同结构，仅标目标 shape）
-      28    : layout_mask（1=活跃格，0=void 格）
+      12-15 : 道具类型（row/column/bomb/color）
+      16    : 冻结标志
+      17-28 : 目标 shape×level 一热（与通道 0-11 相同结构，仅标目标 shape）
+      29    : layout_mask（1=活跃格，0=void 格）
     """
     board = np.zeros((BOARD_CHANNELS, ROWS, COLS), dtype=np.float32)
     target_set = set(state.target_shapes)
@@ -29,9 +30,9 @@ def build_observation(state: GameState) -> dict:
 
     for r in range(ROWS):
         for c in range(COLS):
-            # 通道 28：layout_mask
+            # 通道 29：layout_mask
             if layout is None or layout[r][c]:
-                board[28, r, c] = 1.0
+                board[29, r, c] = 1.0
             else:
                 # void 格：其他通道均为 0，layout_mask 也为 0
                 continue
@@ -47,13 +48,13 @@ def build_observation(state: GameState) -> dict:
                 pi = POWERUP_TYPES.index(cell.powerup_type)
                 board[12 + pi, r, c] = 1.0
             if cell.frozen:
-                board[15, r, c] = 1.0
+                board[16, r, c] = 1.0
             if cell.shape in target_set:
                 si = SHAPES.index(cell.shape)
                 if cell.kind == "normal" and 1 <= cell.level <= 3:
-                    board[16 + si * 3 + (cell.level - 1), r, c] = 1.0
+                    board[17 + si * 3 + (cell.level - 1), r, c] = 1.0
                 elif cell.kind == "powerup":
-                    board[16 + si * 3 + 2, r, c] = 1.0
+                    board[17 + si * 3 + 2, r, c] = 1.0
 
     steps_left = max(0, state.total_steps - state.steps_used)
     global_vec = np.zeros(GLOBAL_DIM, dtype=np.float32)
