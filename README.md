@@ -12,7 +12,7 @@
 - **本地推理服务**：浏览器每回合请求 Python 服务获取 RL 推荐走法
 - **课程学习**：难度 1–3 逐步增加步数限制、任务目标与冻结格
 - **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（90 通道），使模型感知棋盘变化趋势
-- **2-step lookahead 推理**：推理时对 top-K 候选动作各模拟一步，选择「即时奖励 + γ × 下一状态价值」最高的动作，解决死循环与短视问题，不需要重新训练模型
+- **2-step lookahead 推理**：推理时对 top-K 候选动作各模拟一步，按 `W·即时奖励 + γ·V(s')` 选择最优动作（即时奖励加权放大，避免被 value 估值量级淹没）；用真实 3 帧历史估值、固定种子模拟保证可复现
 - **训练防抖**：
   - 仅允许「有效交换」（能触发消除或道具）进入动作 mask
   - 空转交换惩罚、每步成本、连续重复同一动作惩罚
@@ -35,23 +35,17 @@ pip install -r requirements.txt
 
 ```bash
 cd rl_python
-python train/train_ppo.py --curriculum 3 --timesteps 500000 --n-envs 8
+python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v2
 ```
 
-指定保存目录（推荐用于多轮实验，如 `ppo_match3_v2`）：
-
-```bash
-python train/train_ppo.py --curriculum 3 --timesteps 1500000 --n-envs 8 --save-dir runs/ppo_match3_v2
-```
-
-> **注意**：v1 模型在旧合并规则（L2 不计任务分）下训练，且奖励函数和训练参数均已更新，需重新训练。
+> **注意**：v1 模型已多次迭代过时（旧合并规则、29 通道、旧奖励尺度），与当前代码不兼容，必须重新训练。
 
 常用参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--curriculum` | `3` | 课程难度 1（简单）/ 2（中等）/ 3（完整） |
-| `--timesteps` | `500000` | 总训练步数（推荐 1500000） |
+| `--timesteps` | `2500000` | 总训练步数（CNN 需更多步收敛，推荐 ≥2.5M） |
 | `--n-envs` | `8` | 并行环境数 |
 | `--save-dir` | `runs/ppo_match3` | 模型、checkpoint、TensorBoard 日志目录 |
 | `--seed` | `42` | 随机种子 |
@@ -60,9 +54,10 @@ python train/train_ppo.py --curriculum 3 --timesteps 1500000 --n-envs 8 --save-d
 
 | 超参 | 值 | 说明 |
 |------|----|------|
-| `n_steps` | `2048` | GAE 窗口，覆盖约 20 局，win_bonus 信号传播更远 |
+| `n_steps` | `2048` | GAE 窗口，覆盖约 20 局 |
 | `batch_size` | `512` | 配合 n_steps 增大 |
-| `ent_coef` | `0.03` | 熵系数，增加探索避免早期收敛到次优策略 |
+| `ent_coef` | `0.01` | 熵系数（从 0.03 下调，减少探索让策略收敛，此前 ep_rew 停滞） |
+| `vf_coef` | `1.0` | value 损失权重（从 0.5 上调，加强 value 学习，提升 V(s') 估值精度） |
 | `gamma` | `0.99` | 折扣因子 |
 | `learning_rate` | `3e-4` | Adam 学习率 |
 | `features_extractor` | `Match3CnnExtractor` | board 两层 3×3 卷积（C→32→64）+ Linear(256)，global 直接拼接 |
@@ -313,7 +308,7 @@ match3-ai/
 1. 前端 `buildObservation(state)` 构建当前单帧，压入本地 `_frameHistory`（最多保留 3 帧）
 2. `findRlMove()` 将当前局面 JSON + `frameHistory` 一起 POST 到 `/predict`
 3. 服务端从 `frameHistory` 重建各帧 numpy 数组，调用 `stack_observations()` 堆叠
-4. **2-step lookahead**：取 top-K 候选动作，对每个候选用 Python 引擎模拟一步，用 value head 估算下一状态价值，选择「即时奖励 + 0.99 × V(s')」最高的动作
+4. **2-step lookahead**：取 top-K（默认 12）候选动作，对每个候选用 Python 引擎模拟一步，用真实 3 帧历史 `[f_{t-1}, f_t, f_{t+1}]` 经 value head 估算下一状态价值，选择 `W·即时奖励 + 0.99·V(s')`（`W=8`，放大即时奖励权重）最高的动作。模拟用固定种子保证结果可复现
 5. 返回 `from/to` 坐标给前端执行并播放动画
 
 ## 六、奖励函数设计
@@ -354,8 +349,10 @@ match3-ai/
 
 | 结果 | 奖励 |
 |------|------|
-| 胜利 | `+50.0 + 剩余步数 × 0.2` |
-| 失败 | `-10.0 + 每目标缺口数 × -3.0` |
+| 胜利 | `+12.0 + 剩余步数 × 0.05` |
+| 失败 | `-4.0 + 每目标缺口数 × -1.0` |
+
+> 终局奖励尺度已下调（原 `win_bonus=50`）。原因：过大的终局奖励使 episode 回报量级达 ~116，value head 难以精确拟合，估值误差（±3.8）恰好淹没单步即时奖励差异（~4），导致 2-step lookahead 的决策被 value 噪声主导而非即时奖励。下调后回报量级降至 ~40，value 精度相对单步信号显著提升。过程奖励（任务分、多连消等）保持不变。
 
 ### 6.5 即时奖励优先级排序
 

@@ -30,16 +30,16 @@ python -m pytest tests/test_parity.py -v        # JS/Python engine parity (needs
 python tests/test_predict_load.py               # requires a saved model
 
 # inference server (must be running for the frontend's RL button to work)
-# uses 2-step lookahead by default (top-k=8); add --top-k N to adjust
+# 2-step lookahead: score = W*r_imm + gamma*V(s'), W=8 (reward weight), top-k=12, fixed-seed sim
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model
 python serve/predict_server.py --model runs/ppo_match3_v2/final_model --stochastic
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model --top-k 12
+python serve/predict_server.py --model runs/ppo_match3_v2/final_model --top-k 16
 
 # frontend (serve from repo root)
 python -m http.server 8080
 
-# training (CNN extractor + 2048 n_steps; ~1.5M steps recommended)
-python train/train_ppo.py --curriculum 3 --timesteps 1500000 --n-envs 8 --save-dir runs/ppo_match3_v2
+# training (CNN extractor + 2048 n_steps + vf_coef=1.0 + ent_coef=0.01; ~2.5M steps recommended)
+python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v2
 
 # evaluation
 python train/eval.py --model runs/ppo_match3_v2/final_model --curriculum 3 --episodes 100

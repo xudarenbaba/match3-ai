@@ -38,10 +38,13 @@ REWARD = {
     "reverse_swap_penalty": -0.25,
 
     # ── 终局信号 ──────────────────────────────────────────────────
-    "win_bonus": 50.0,
-    "steps_left_bonus": 0.2,
-    "lose_penalty": -10.0,
-    "task_deficit_penalty": -3.0,
+    # 降低终局奖励尺度：原 win_bonus=50 使 episode 回报量级达 ~116，value head 难精确拟合，
+    # 估值误差(±3.8)恰好淹没单步即时奖励差异(~4)，导致 lookahead 决策被 value 噪声主导。
+    # 缩小终局尺度后回报量级降至 ~40，value 估值精度相对单步信号显著提升。
+    "win_bonus": 12.0,
+    "steps_left_bonus": 0.05,
+    "lose_penalty": -4.0,
+    "task_deficit_penalty": -1.0,
 }
 
 

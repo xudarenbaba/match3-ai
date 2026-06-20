@@ -36,9 +36,14 @@ MODEL: MaskablePPO | None = None
 NON_DETERMINISTIC = False
 
 # lookahead 超参数
-LOOKAHEAD_TOP_K = 8      # 第一层展开候选动作数
-LOOKAHEAD_GAMMA = 0.99   # 折扣因子（与训练保持一致）
-_RNG = random.Random()   # 仅供 lookahead 模拟使用
+LOOKAHEAD_TOP_K = 12         # 第一层展开候选动作数
+LOOKAHEAD_GAMMA = 0.99       # 折扣因子（与训练保持一致）
+# 即时奖励权重：value head 估值量级远大于单步即时奖励，若直接相加会被 V 噪声淹没。
+# 放大即时奖励权重，让「4连>3连」等正确的单步信号主导决策。
+LOOKAHEAD_REWARD_WEIGHT = 8.0
+# lookahead 模拟会触发 gravity 随机补充新格子。用固定种子让同一局面的评分可复现、
+# 推理结果稳定（否则同一局面多次请求可能给出不同动作）。
+LOOKAHEAD_SEED = 12345
 
 
 def _get_value(obs: dict) -> float:
@@ -101,9 +106,11 @@ def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
             continue
 
         # ── 模拟执行一步 ──────────────────────────────────────────
+        # 每个候选用相同固定种子的 rng，保证补充新格子的随机性一致、评分可比、结果可复现
+        sim_rng = random.Random(LOOKAHEAD_SEED)
         sim_state = snapshot_state(state)
         sim_state.last_action = state.last_action
-        exec_result = execute_move(sim_state, _RNG, swap["from"], swap["to"])
+        exec_result = execute_move(sim_state, sim_rng, swap["from"], swap["to"])
         if not exec_result["ok"]:
             continue
         step_result = exec_result["result"]
@@ -113,12 +120,14 @@ def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
         r_imm = _immediate_reward(state, step_result, sim_state)
 
         # ── 下一状态的价值估计 ────────────────────────────────────
-        next_obs_single = build_observation(sim_state)
-        # 用当前帧堆叠：把新帧追加到旧帧历史末尾
-        next_obs = stack_observations([obs_single_from_stacked(obs), next_obs_single])
+        # 正确的帧堆叠：用真实历史 [f_{t-1}, f_t, f_{t+1}]，避免引入零帧
+        # （旧实现 stack([f_t, f_{t+1}]) 会补零帧 → 与训练分布不符，污染 V 估值）
+        prev_frames = last_two_frames(obs)  # [f_{t-1}, f_t]
+        next_obs_single = build_observation(sim_state)  # f_{t+1}
+        next_obs = stack_observations(prev_frames + [next_obs_single])
         v_next = _get_value(next_obs)
 
-        total = r_imm + LOOKAHEAD_GAMMA * v_next
+        total = LOOKAHEAD_REWARD_WEIGHT * r_imm + LOOKAHEAD_GAMMA * v_next
 
         if total > best_score:
             best_score = total
@@ -127,10 +136,23 @@ def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
     return best_action
 
 
+def last_two_frames(stacked_obs: dict) -> list[dict]:
+    """从堆叠 obs (FRAME_STACK 帧) 中取出最近两帧 [f_{t-1}, f_t] 作为单帧 dict。
+
+    用于 lookahead 构造 V(s') 的输入：[f_{t-1}, f_t, f_{t+1}]，保持 3 帧真实历史。
+    global 向量取最新帧（stacked_obs 里只保留了最新帧的 global）。
+    """
+    board_stacked = stacked_obs["board"]  # (BOARD_CHANNELS*FRAME_STACK, 10, 10)
+    f_prev = board_stacked[BOARD_CHANNELS:2 * BOARD_CHANNELS]   # 倒数第二帧
+    f_curr = board_stacked[-BOARD_CHANNELS:]                    # 最新帧
+    g = stacked_obs["global"]
+    return [{"board": f_prev, "global": g}, {"board": f_curr, "global": g}]
+
+
 def obs_single_from_stacked(stacked_obs: dict) -> dict:
     """从堆叠 obs 中取出最新一帧（最后 BOARD_CHANNELS 个通道）。"""
-    board_stacked = stacked_obs["board"]  # (87, 10, 10)
-    board_last = board_stacked[-BOARD_CHANNELS:]  # (29, 10, 10)
+    board_stacked = stacked_obs["board"]
+    board_last = board_stacked[-BOARD_CHANNELS:]
     return {"board": board_last, "global": stacked_obs["global"]}
 
 

@@ -40,7 +40,7 @@ def make_env(curriculum_level: int, seed: int = 0):
 def main():
     parser = argparse.ArgumentParser(description="训练消消乐 RL 策略 (MaskablePPO)")
     parser.add_argument("--curriculum", type=int, default=3, choices=[1, 2, 3], help="课程难度 1-3")
-    parser.add_argument("--timesteps", type=int, default=500_000, help="总训练步数")
+    parser.add_argument("--timesteps", type=int, default=2_500_000, help="总训练步数（CNN 需更多步收敛，推荐 ≥2.5M）")
     parser.add_argument("--n-envs", type=int, default=8, help="并行环境数")
     parser.add_argument("--save-dir", type=str, default="runs/ppo_match3", help="模型与日志目录")
     parser.add_argument("--seed", type=int, default=42)
@@ -70,10 +70,11 @@ def main():
         verbose=1,
         tensorboard_log=os.path.join(args.save_dir, "tb"),
         learning_rate=3e-4,
-        n_steps=2048,    # 1024 → 2048：更长的 GAE 窗口，win_bonus 信号传播更远
-        batch_size=512,  # 256 → 512：配合 n_steps 增大
+        n_steps=2048,    # 更长的 GAE 窗口，win_bonus 信号传播更远
+        batch_size=512,  # 配合 n_steps 增大
         gamma=0.99,
-        ent_coef=0.03,   # 0.01 → 0.03：增加探索，避免早收敛到次优策略
+        ent_coef=0.01,   # 0.03 → 0.01：减少探索，让策略从停滞探索转向利用（ep_rew 此前不涨）
+        vf_coef=1.0,     # 0.5 → 1.0：加强 value 学习，提升 V(s') 估值精度（lookahead 依赖它）
         policy_kwargs=policy_kwargs,
         seed=args.seed,
     )
