@@ -35,7 +35,7 @@ pip install -r requirements.txt
 
 ```bash
 cd rl_python
-python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v2
+python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v3
 ```
 
 > **注意**：v1 模型已多次迭代过时（旧合并规则、29 通道、旧奖励尺度），与当前代码不兼容，必须重新训练。
@@ -77,7 +77,7 @@ runs/<实验名>/
 查看训练曲线：
 
 ```bash
-tensorboard --logdir runs/ppo_match3_v2/tb
+tensorboard --logdir runs/ppo_match3_v3/tb
 ```
 
 ### 3) 启动推理服务（必须先启动）
@@ -87,31 +87,31 @@ tensorboard --logdir runs/ppo_match3_v2/tb
 ```bash
 conda activate rlgame
 cd rl_python
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model
+python serve/predict_server.py --model runs/ppo_match3_v3/final_model
 ```
 
 使用评估最优模型：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v2/best/best_model
+python serve/predict_server.py --model runs/ppo_match3_v3/best/best_model
 ```
 
 非确定性模式（更不容易重复动作，推荐对局时使用）：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model --stochastic
+python serve/predict_server.py --model runs/ppo_match3_v3/final_model --stochastic
 ```
 
-调节 2-step lookahead 候选数（默认 8，越大越精确但略慢）：
+调节 2-step lookahead 候选数（默认 12，越大越精确但略慢）：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model --top-k 12
+python serve/predict_server.py --model runs/ppo_match3_v3/final_model --top-k 16
 ```
 
 自定义端口：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model --host 127.0.0.1 --port 8765
+python serve/predict_server.py --model runs/ppo_match3_v3/final_model --host 127.0.0.1 --port 8765
 ```
 
 看到 `推理服务: http://127.0.0.1:8765` 表示启动成功。
@@ -288,8 +288,9 @@ match3-ai/
    │  ├─ parity_js.mjs                # 对拍 JS 侧输出脚本
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
    └─ runs/                           # 训练产物（部分已提交 git，见下方说明）
-       ├─ ppo_match3_v1/               # v1 模型（旧合并规则下训练，建议重训覆盖）
-       └─ ppo_match3_v2/               # 推荐新训练目录（final_model.zip 和 best/ 提交 git）
+       ├─ ppo_match3_v1/               # v1 模型（旧合并规则、29通道，已过时）
+       ├─ ppo_match3_v2/               # v2 模型（CNN+新道具+修复bug，30通道，已过时）
+       └─ ppo_match3_v3/               # 当前最新模型（CNN+修复lookahead+降奖励尺度）
 ```
 
 ## 五、训练与推理链路
@@ -378,7 +379,7 @@ match3-ai/
 
 ```bash
 # 在 rl_python/ 目录下运行
-python train/eval.py --model runs/ppo_match3_v2/final_model --curriculum 3 --episodes 100
+python train/eval.py --model runs/ppo_match3_v3/final_model --curriculum 3 --episodes 100
 
 # 随机策略基线（不传 --model）
 python train/eval.py --curriculum 3 --episodes 100
