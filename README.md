@@ -6,9 +6,11 @@
 
 ## 一、核心特性
 
-- **MaskablePPO 强化学习**：动作空间 180 维（90 横向 + 90 纵向相邻交换）
+- **MaskablePPO 强化学习**：动作空间 280 维（90 横向交换 + 90 纵向交换 + 100 捏爆）
+- **捏爆操作**：AI 可消耗 1 步直接清掉一个普通非冰冻格（不解冻相邻），为下一步创造更优局面；有固定成本防滥用
+- **双任务系统（可组合）**：形状任务（指定图形合到最高级）+ 解冻任务（解除指定数量冰壳），每局可单独或组合出现
 - **CNN 特征提取**：`board` 经两层 3×3 卷积提取空间结构，再与 `global` 拼接送入 MLP，显著提升对「局部 3 连/4 连机会」的识别能力
-- **多输入观测**：`board` 30 通道 × 3 帧堆叠 = 90 通道 × 10×10 棋盘 + `global` 15 维全局向量（当前帧）
+- **多输入观测**：`board` 30 通道 × 3 帧堆叠 = 90 通道 × 10×10 棋盘 + `global` 17 维全局向量（当前帧）
 - **本地推理服务**：浏览器每回合请求 Python 服务获取 RL 推荐走法
 - **课程学习**：难度 1–3 逐步增加步数限制、任务目标与冻结格
 - **3 帧堆叠时间视野**：将最近 3 帧棋盘观测沿通道轴拼接（90 通道），使模型感知棋盘变化趋势
@@ -35,7 +37,7 @@ pip install -r requirements.txt
 
 ```bash
 cd rl_python
-python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v3
+python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v4
 ```
 
 > **注意**：v1 模型已多次迭代过时（旧合并规则、29 通道、旧奖励尺度），与当前代码不兼容，必须重新训练。
@@ -77,7 +79,7 @@ runs/<实验名>/
 查看训练曲线：
 
 ```bash
-tensorboard --logdir runs/ppo_match3_v3/tb
+tensorboard --logdir runs/ppo_match3_v4/tb
 ```
 
 ### 3) 启动推理服务（必须先启动）
@@ -87,31 +89,31 @@ tensorboard --logdir runs/ppo_match3_v3/tb
 ```bash
 conda activate rlgame
 cd rl_python
-python serve/predict_server.py --model runs/ppo_match3_v3/final_model
+python serve/predict_server.py --model runs/ppo_match3_v4/final_model
 ```
 
 使用评估最优模型：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v3/best/best_model
+python serve/predict_server.py --model runs/ppo_match3_v4/best/best_model
 ```
 
 非确定性模式（更不容易重复动作，推荐对局时使用）：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v3/final_model --stochastic
+python serve/predict_server.py --model runs/ppo_match3_v4/final_model --stochastic
 ```
 
 调节 2-step lookahead 候选数（默认 12，越大越精确但略慢）：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v3/final_model --top-k 16
+python serve/predict_server.py --model runs/ppo_match3_v4/final_model --top-k 16
 ```
 
 自定义端口：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v3/final_model --host 127.0.0.1 --port 8765
+python serve/predict_server.py --model runs/ppo_match3_v4/final_model --host 127.0.0.1 --port 8765
 ```
 
 看到 `推理服务: http://127.0.0.1:8765` 表示启动成功。
@@ -141,7 +143,7 @@ python -m http.server 8080
 | 字段 | 形状 | 取值范围 | 说明 |
 |------|------|----------|------|
 | `board` | `(90, 10, 10)` | `[0, 1]` | 3 帧堆叠棋盘特征：30 通道/帧 × 3 帧，最旧帧在前，最新帧在后 |
-| `global` | `(15,)` | `[0, 1]` | 当前帧全局标量特征（步数、分数、任务进度等） |
+| `global` | `(17,)` | `[0, 1]` | 当前帧全局标量特征（步数、分数、形状任务、解冻任务进度等） |
 
 **帧堆叠说明**：每次决策时将当前帧与前 2 帧的棋盘观测沿通道轴拼接，使模型能感知棋盘的变化趋势。历史帧不足时用零帧补齐。`global` 向量始终取最新帧，不堆叠。
 
@@ -180,7 +182,7 @@ python -m http.server 8080
 
 空位（`null`）不激活任何通道。
 
-### 3.3 `global` 向量（15 维）
+### 3.3 `global` 向量（17 维）
 
 | 索引 | 名称 | 计算公式 | 说明 |
 |------|------|----------|------|
@@ -192,24 +194,32 @@ python -m http.server 8080
 | 8–11 | `is_target_*` | `1` 若该图形是本局目标，否则 `0` | 目标图形 one-hot |
 | 12 | `min_target_progress` | `min(task_scores[target] / 4)` | 最慢目标图形的完成度 |
 | 13 | `won` | `1` 若已通关，否则 `0` | 胜负标志 |
-| 14 | `last_action_norm` | `(last_action + 1) / 180` | 上一步动作编号归一化（无历史时为 `-1` → `0`） |
+| 14 | `last_action_norm` | `(last_action + 1) / 280` | 上一步动作编号归一化（无历史时为 `-1` → `0`） |
+| 15 | `unfreeze_progress` | `unfreeze_count / unfreeze_target` | 解冻任务进度（无解冻任务时为 `1`） |
+| 16 | `has_unfreeze_task` | `1` 若本局有解冻任务，否则 `0` | 解冻任务标识 |
 
 ### 3.4 动作空间与 mask
 
-- **动作总数**：180（`MAX_ACTIONS`）
+- **动作总数**：280（`MAX_ACTIONS`）
   - `0–89`：水平相邻交换，`action = r * 9 + c`（`(r,c)` 与 `(r,c+1)`）
   - `90–179`：垂直相邻交换，`action = 90 + r * 10 + c`（`(r,c)` 与 `(r+1,c)`）
-- **动作 mask**：仅「有效交换」为 `1`（交换后能消除、触发道具或得分）；若无有效交换则退化为全部相邻交换，避免环境卡死。
+  - `180–279`：捏爆，`action = 180 + r * 10 + c`（直接清掉 `(r,c)` 的普通非冰冻格）
+- **动作 mask**：
+  - 交换段：仅「有效交换」为 `1`（交换后能消除/触发道具/得分）；**冰冻格不可参与交换**
+  - 捏爆段：仅对「普通格 且 非冰冻 且 非道具 且 非空」为 `1`
+  - 若无任何有效动作则退化为全部相邻交换，避免环境卡死
 
 对应代码：`rl_python/match3_engine/actions.py`、`src/actions/encoding.js`。
 
 ### 3.5 课程难度（`--curriculum`）
 
-| 等级 | 步数上限 | 任务目标数 | 目标图形数 | 冻结格 |
-|------|----------|------------|------------|--------|
-| 1 | 150 | 2 分/图形 | 1 种 | 否 |
-| 2 | 120 | 3 分/图形 | 2 种 | 是 |
-| 3 | 100 | 4 分/图形 | 2 种 | 是 |
+| 等级 | 步数上限 | 形状任务 | 解冻任务 | 任务组合 |
+|------|----------|----------|----------|----------|
+| 1 | 150 | 1 种图形达 2 分 | 无 | 仅形状 |
+| 2 | 120 | 2 种图形达 3 分 | 解冻 4 个 | 随机：仅形状 / 仅解冻 / 两者 |
+| 3 | 100 | 2 种图形达 4 分 | 解冻 6 个 | 随机：仅形状 / 仅解冻 / 两者 |
+
+> 难度 ≥2 时每局随机选择任务组合。解冻任务会提高初始冰冻格比例（`frozen_ratio=0.2`）确保任务可完成。胜利需所有激活任务都达成。
 
 ### 3.6 道具系统
 
@@ -226,7 +236,13 @@ python -m http.server 8080
 >
 > 道具生成的任务分统一只走 `special_gained`，不重复计入 `task_from_powerup`。
 
-**关键不变量（格子生成分布）**：顶部掉落补充用 `create_cell`（97.5% L1 普通格 + 2.5% 道具），初始棋盘用 `create_initial_cell`（纯 L1、无道具）。JS 与 Python 两侧严格一致，确保训练分布 = 实际游戏分布。
+### 3.7 冰冻格与捏爆
+
+- **冰冻格（特殊格）**：不可移动、不可参与合并、不可捏爆。只能靠**相邻消除**解除冰冻状态，解冻后恢复为普通格。
+- **解冻任务**：要求解除指定数量的冰壳。「解除冰冻状态」即计 1 个，不要求消除该格本身。
+- **捏爆**：消耗 1 步直接清掉一个普通非冰冻格，**不解冻相邻冰壳**（捏爆是为下一步创造局面）。捏爆引发的连锁消除按正常规则解冻、计分。捏爆有固定成本（`pop_cost`），无即时正收益，战略价值靠 value function 多步信用分配体现，从而防止盲目捏爆。
+
+**关键不变量（格子生成分布）**：顶部掉落补充用 `create_cell`（97.5% L1 普通格 + 2.5% 道具），初始棋盘用 `create_initial_cell`（纯 L1、无道具）。冰冻格只在初始化生成，游戏过程只减不增。JS 与 Python 两侧严格一致，确保训练分布 = 实际游戏分布。
 
 ## 四、项目目录与文件职责
 
@@ -245,12 +261,12 @@ match3-ai/
 │  │  ├─ gravity.js                   # 消除后掉落补充、随机洗牌、冻结格生成
 │  │  ├─ match.js                     # 三连匹配检测、合并升级、道具生成
 │  │  ├─ powerup.js                   # 四种道具（行/列升级、炸弹消除、同形升级）效果计算
-│  │  ├─ resolver.js                  # 交换后整步结算（消除链、道具连锁、得分）
-│  │  └─ game-state.js                # 对局状态创建、提交移动、记录 lastAction
+│  │  ├─ resolver.js                  # 交换/捏爆整步结算（消除链、道具连锁、解冻计数）
+│  │  └─ game-state.js                # 对局状态创建、双任务胜利判定、move 提交
 │  ├─ actions/
-│  │  └─ encoding.js                  # 动作编解码（180 维）、相邻交换枚举
+│  │  └─ encoding.js                  # 动作编解码（280 维：交换+捏爆）、相邻交换枚举、冰冻锁定
 │  ├─ rl/
-│  │  ├─ observation.js               # JS 侧观测编码（30 通道单帧 + 15 维 global；帧堆叠由 rl-policy.js 维护）
+│  │  ├─ observation.js               # JS 侧观测编码（30 通道单帧 + 17 维 global；帧堆叠由 rl-policy.js 维护）
 │  │  └─ reward.js                    # JS 侧奖励定义（与 Python 训练奖励对齐参考）
 │  ├─ ai/
 │  │  ├─ rl-policy.js                 # 调用推理服务 /health、/predict；序列化局面 JSON
@@ -266,15 +282,15 @@ match3-ai/
    │  ├─ board.py                     # 棋盘克隆、边界、空格判定
    │  ├─ gravity.py                   # 掉落、补充、洗牌、冻结
    │  ├─ match.py                     # 匹配检测与合并升级
-   │  ├─ powerup.py                   # 道具效果与范围计算
-   │  ├─ resolver.py                  # try_swap / 整步结算主逻辑
-   │  ├─ actions.py                   # 动作编解码、有效交换 mask 构造
-   │  └─ game.py                      # GameState、create_game_state、execute_move
+   │  ├─ powerup.py                   # 道具升级效果与范围计算
+   │  ├─ resolver.py                  # try_swap / pop_cell / 整步结算 / 解冻计数
+   │  ├─ actions.py                   # 动作编解码（280维）、mask、冰冻锁定、捏爆条件
+   │  └─ game.py                      # GameState（双任务）、create_game_state、execute_move（move 分发）
    ├─ env/
    │  ├─ __init__.py                  # 包导出
-   │  ├─ match3_env.py                # Gymnasium 环境（reset/step/action_masks/课程学习）
-   │  ├─ observation.py               # 训练观测编码（单帧 30ch；堆叠后 90ch × 3帧 + global 15d）
-   │  └─ reward.py                    # 训练奖励（消除分、任务分、空转/重复动作惩罚）
+   │  ├─ match3_env.py                # Gymnasium 环境（reset/step/action_masks/课程随机任务组合）
+   │  ├─ observation.py               # 训练观测编码（单帧 30ch；堆叠后 90ch × 3帧 + global 17d）
+   │  └─ reward.py                    # 训练奖励（消除分、任务分、解冻奖励、捏爆成本、终局信号）
    ├─ train/
    │  ├─ train_ppo.py                 # MaskablePPO 训练入口（checkpoint + eval 回调）
    │  ├─ features.py                  # Match3CnnExtractor 自定义 CNN 特征提取器
@@ -288,9 +304,8 @@ match3-ai/
    │  ├─ parity_js.mjs                # 对拍 JS 侧输出脚本
    │  └─ test_predict_load.py         # 加载模型并执行一次 predict 的脚本
    └─ runs/                           # 训练产物（部分已提交 git，见下方说明）
-       ├─ ppo_match3_v1/               # v1 模型（旧合并规则、29通道，已过时）
-       ├─ ppo_match3_v2/               # v2 模型（CNN+新道具+修复bug，30通道，已过时）
-       └─ ppo_match3_v3/               # 当前最新模型（CNN+修复lookahead+降奖励尺度）
+       ├─ ppo_match3_v1~v3/            # 历史模型（动作空间/观测/规则均已变化，全部过时）
+       └─ ppo_match3_v4/               # 当前目标（280动作+捏爆+双任务+17维global）
 ```
 
 ## 五、训练与推理链路
@@ -330,11 +345,12 @@ match3-ai/
 | 基础得分 | `total_score × 0.005` | 降权保留，避免与密集信号重叠 |
 | 连锁得分 | `chain_score × 0.005` | 鼓励连锁消除 |
 
-### 6.2 稀疏信号（L2 合并完成时）
+### 6.2 稀疏信号（任务完成时）
 
 | 信号 | 公式 | 说明 |
 |------|------|------|
-| **任务进度** | `task_delta × +3.0` | L2 三连消 → `special_gained` → `task_score +1` 时触发（L2 为当前最高级） |
+| **形状任务进度** | `task_delta × +3.0` | L2 三连消 → `special_gained` → `task_score +1` 时触发 |
+| **解冻奖励** | `unfrozen_count × +0.5` | 每解除 1 个冰壳（含连锁解冻）触发，引导解冻任务 |
 
 消除目标 L2 时各信号叠加：`target_clear(+0.9)` + `L2_bonus(+1.5)` + `task_delta(+3.0)` + `score(+0.03)` - `step(-0.03)` = **+5.4**，远高于其他任何单步操作，强化"完成目标"这个最终动作。
 
@@ -343,15 +359,18 @@ match3-ai/
 | 信号 | 值 | 条件 |
 |------|-----|------|
 | 每步成本 | `-0.03` | 每步无条件 |
-| 空挥惩罚 | `-0.2` | 无消除且无道具 |
+| 空挥惩罚 | `-0.2` | 交换无消除且无道具（捏爆不触发此项） |
+| **捏爆成本** | `-0.1` | 捏爆专属成本，防滥用（替代空挥惩罚） |
 | 重复动作 | `-0.25` | 与上一步动作相同 |
+
+> 捏爆无即时正收益（捏掉的格子不计消除分），固定成本 `pop_cost=-0.1` + `step_cost=-0.03` ≈ -0.13。只有改善下一步局面（value 升高）才划算，从而防止盲目捏爆。
 
 ### 6.4 终局信号
 
 | 结果 | 奖励 |
 |------|------|
 | 胜利 | `+12.0 + 剩余步数 × 0.05` |
-| 失败 | `-4.0 + 每目标缺口数 × -1.0` |
+| 失败 | `-4.0 + (形状缺口 + 解冻缺口) × -1.0` |
 
 > 终局奖励尺度已下调（原 `win_bonus=50`）。原因：过大的终局奖励使 episode 回报量级达 ~116，value head 难以精确拟合，估值误差（±3.8）恰好淹没单步即时奖励差异（~4），导致 2-step lookahead 的决策被 value 噪声主导而非即时奖励。下调后回报量级降至 ~40，value 精度相对单步信号显著提升。过程奖励（任务分、多连消等）保持不变。
 
@@ -379,7 +398,7 @@ match3-ai/
 
 ```bash
 # 在 rl_python/ 目录下运行
-python train/eval.py --model runs/ppo_match3_v3/final_model --curriculum 3 --episodes 100
+python train/eval.py --model runs/ppo_match3_v4/final_model --curriculum 3 --episodes 100
 
 # 随机策略基线（不传 --model）
 python train/eval.py --curriculum 3 --episodes 100

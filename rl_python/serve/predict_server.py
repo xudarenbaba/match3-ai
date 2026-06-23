@@ -28,7 +28,7 @@ from sb3_contrib import MaskablePPO
 
 from env.observation import build_observation, stack_observations, BOARD_CHANNELS, ROWS, GLOBAL_DIM
 from env.reward import compute_reward
-from match3_engine.actions import build_action_mask, decode_action
+from match3_engine.actions import build_action_mask, decode_action, POP_OFFSET
 from match3_engine.game import snapshot_state, execute_move
 from serve.state_codec import json_to_game_state
 
@@ -64,12 +64,67 @@ def _immediate_reward(prev_state, result: dict, next_state) -> float:
     return compute_reward(prev_state, result, next_state)
 
 
+def _best_followup_value(after_state, frame_t: dict, frame_t1: dict) -> float:
+    """枚举 after_state 的所有有效交换，返回最优 1-step lookahead 值
+    `max_swap( W·r' + γ·V(s'') )`。frame_t/frame_t1 是 after_state 的前两帧历史。
+
+    这是 Bellman 最优 V(s') ≈ max_a' Q(s', a') 的真实估计，用于替代 value head
+    对 after_state 的直接估值——避免 value 对某些局面（尤其捏爆后局面）的高估。
+    第二层只考虑交换，不再套捏爆，避免捏爆套捏爆。
+    """
+    fmask = build_action_mask(after_state.board, after_state.layout)
+    best = -float("inf")
+    for sa in np.where(fmask > 0)[0]:
+        if sa >= POP_OFFSET:
+            continue
+        sw = decode_action(int(sa))
+        if sw is None:
+            continue
+        sr = random.Random(LOOKAHEAD_SEED)
+        ns = snapshot_state(after_state)
+        ns.last_action = after_state.last_action
+        er = execute_move(ns, sr, sw)
+        if not er["ok"]:
+            continue
+        er["result"]["action_index"] = int(sa)
+        r = _immediate_reward(after_state, er["result"], ns)
+        v = _get_value(stack_observations([frame_t, frame_t1, build_observation(ns)]))
+        cand = LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * v
+        if cand > best:
+            best = cand
+    if best == -float("inf"):
+        # 无任何有效交换：退化为 after_state 自身 value
+        best = _get_value(stack_observations([frame_t, frame_t1, frame_t1]))
+    return best
+
+
+def _score_action(state, prev_frames: list, f_curr: dict, move: dict, action_idx: int) -> float:
+    """统一的 2-step 评分（交换与捏爆对称）：
+
+        score = W·r(s,a) + γ · max_a'( W·r(s',a') + γ·V(s'') )
+
+    交换与捏爆都展开下一层，用同一基准比较。捏爆无即时收益（r 含 pop_cost 为负），
+    只有当「捏爆后最优下一步」明显优于「直接交换及其后续」时才会胜出——从而实现
+    「捏爆必须为下一步创造大消除/道具机会」的语义，杜绝随意捏爆。
+    """
+    sim_rng = random.Random(LOOKAHEAD_SEED)
+    ss = snapshot_state(state)
+    ss.last_action = state.last_action
+    er = execute_move(ss, sim_rng, move)
+    if not er["ok"]:
+        return -float("inf")
+    er["result"]["action_index"] = action_idx
+    r = _immediate_reward(state, er["result"], ss)  # 交换得分 或 捏爆成本(负)
+    f_next = build_observation(ss)
+    v_la = _best_followup_value(ss, f_curr, f_next)
+    return LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * v_la
+
+
 def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
     """
-    2-step lookahead 动作选择：
-      - 获取当前 top-K 候选动作（按 action logits 降序）
-      - 对每个候选模拟一步，计算即时奖励 + gamma * V(s')
-      - 返回得分最高的动作
+    统一 2-step lookahead 动作选择：
+      所有候选（交换/捏爆）均评估 `W·r + γ·max_followup`，对称公平。
+      捏爆只有在「捏爆后下一步真能大消除/触发道具」时才会胜出。
     """
     # ── 拿 action distribution logits ──────────────────────────────
     board_t = torch.tensor(obs["board"][None], dtype=torch.float32)
@@ -78,17 +133,14 @@ def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
         "board": board_t.to(MODEL.device),
         "global": global_t.to(MODEL.device),
     }
-    # get_distribution 期望 numpy 数组，shape (n_envs, n_actions)
-    mask_np = mask.astype(bool)[None]  # (1, 180)
+    mask_np = mask.astype(bool)[None]
 
     with torch.no_grad():
         dist = MODEL.policy.get_distribution(obs_tensor, action_masks=mask_np)
-        logits = dist.distribution.logits.squeeze(0).cpu().numpy()  # (180,)
+        logits = dist.distribution.logits.squeeze(0).cpu().numpy()
 
-    # 只考虑有效动作，取 top-K
     valid_indices = np.where(mask > 0)[0]
     if len(valid_indices) == 0:
-        # 无有效动作，回退到模型直接预测
         action, _ = MODEL.predict(obs, action_masks=mask.astype(bool), deterministic=True)
         return int(action)
 
@@ -97,38 +149,17 @@ def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
     top_local = np.argsort(valid_logits)[::-1][:k]
     top_k_actions = valid_indices[top_local]
 
+    prev_frames = last_two_frames(obs)  # [f_{t-1}, f_t]
+    f_curr = prev_frames[1]             # f_t
+
     best_action = int(top_k_actions[0])
     best_score = -float("inf")
 
     for action_idx in top_k_actions:
-        swap = decode_action(int(action_idx))
-        if swap is None:
+        move = decode_action(int(action_idx))
+        if move is None:
             continue
-
-        # ── 模拟执行一步 ──────────────────────────────────────────
-        # 每个候选用相同固定种子的 rng，保证补充新格子的随机性一致、评分可比、结果可复现
-        sim_rng = random.Random(LOOKAHEAD_SEED)
-        sim_state = snapshot_state(state)
-        sim_state.last_action = state.last_action
-        exec_result = execute_move(sim_state, sim_rng, swap["from"], swap["to"])
-        if not exec_result["ok"]:
-            continue
-        step_result = exec_result["result"]
-        step_result["action_index"] = int(action_idx)
-
-        # ── 即时奖励 ──────────────────────────────────────────────
-        r_imm = _immediate_reward(state, step_result, sim_state)
-
-        # ── 下一状态的价值估计 ────────────────────────────────────
-        # 正确的帧堆叠：用真实历史 [f_{t-1}, f_t, f_{t+1}]，避免引入零帧
-        # （旧实现 stack([f_t, f_{t+1}]) 会补零帧 → 与训练分布不符，污染 V 估值）
-        prev_frames = last_two_frames(obs)  # [f_{t-1}, f_t]
-        next_obs_single = build_observation(sim_state)  # f_{t+1}
-        next_obs = stack_observations(prev_frames + [next_obs_single])
-        v_next = _get_value(next_obs)
-
-        total = LOOKAHEAD_REWARD_WEIGHT * r_imm + LOOKAHEAD_GAMMA * v_next
-
+        total = _score_action(state, prev_frames, f_curr, move, int(action_idx))
         if total > best_score:
             best_score = total
             best_action = int(action_idx)
@@ -223,20 +254,20 @@ class PredictHandler(BaseHTTPRequestHandler):
                     return
                 action = int(valid[0])
 
-            swap = decode_action(action)
-            if swap is None:
+            move = decode_action(action)
+            if move is None:
                 self._json_response(400, {"error": "invalid action decode"})
                 return
 
-            self._json_response(
-                200,
-                {
-                    "action": action,
-                    "from": swap["from"],
-                    "to": swap["to"],
-                    "reason": f"RL 策略（2步前瞻，动作 #{action}）",
-                },
-            )
+            resp = {"action": action, "type": move["type"],
+                    "reason": f"RL 策略（2步前瞻，动作 #{action}）"}
+            if move["type"] == "pop":
+                resp["r"] = move["r"]
+                resp["c"] = move["c"]
+            else:
+                resp["from"] = move["from"]
+                resp["to"] = move["to"]
+            self._json_response(200, resp)
         except Exception as exc:
             self._json_response(500, {"error": str(exc)})
 

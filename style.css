@@ -60,6 +60,17 @@ body {
 }
 .stat strong { color: var(--accent); font-variant-numeric: tabular-nums; }
 
+.unfreeze-panel { display: flex; flex-direction: column; gap: 0.34rem; margin-bottom: 0.34rem; }
+.special-row.is-unfreeze {
+  background: rgba(96, 165, 250, 0.14);
+  border: 1px solid rgba(96, 165, 250, 0.45);
+}
+.special-icon.icon-ice {
+  width: 14px; height: 14px; border-radius: 3px;
+  background: linear-gradient(135deg, #bae6fd, #38bdf8);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
+}
+.badge-ice { background: #38bdf8; }
 .special-panel { display: flex; flex-direction: column; gap: 0.34rem; }
 .special-row {
   display: flex;

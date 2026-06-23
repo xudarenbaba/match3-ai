@@ -22,6 +22,15 @@ REWARD = {
     # ── 稀疏任务信号 ──────────────────────────────────────────────
     "task_delta": 3.0,
 
+    # ── 解冻任务信号 ──────────────────────────────────────────────
+    # 每解冻 1 个冰壳 +0.5（引导解冻任务，类似 task_delta）
+    "unfreeze_reward": 0.5,
+
+    # ── 捏爆成本：防滥用 ─────────────────────────────────────────
+    # 捏爆本身无即时正收益（捏掉的格子不计消除分），只有改善下一步局面才划算。
+    # 固定额外成本让盲目捏爆亏分，战略价值靠 value function 多步信用分配体现。
+    "pop_cost": -0.1,
+
     # ── 连消道具奖励：4连/5连消触发生成道具 ─────────────────────
     # 生成 column 道具（4连消）
     "combo_powerup_column": 0.4,
@@ -69,6 +78,9 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
         delta = nxt.task_scores.get(shape, 0) - prev.task_scores.get(shape, 0)
         r += delta * REWARD["task_delta"]
 
+    # ── 解冻奖励 ──────────────────────────────────────────────────
+    r += result.get("unfrozen_count", 0) * REWARD["unfreeze_reward"]
+
     # ── L2 目标格消除额外奖励 + 多连消奖励 + 道具生成奖励 ────────
     # merge_events 包含每次合并的 level/shape/count/result_cell
     for event in result.get("merge_events", []):
@@ -96,7 +108,11 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
                 r += REWARD["combo_powerup_color"]
 
     # ── 步数惩罚 ──────────────────────────────────────────────────
-    if not result.get("had_match") and not result.get("used_powerup"):
+    is_pop = bool(result.get("is_pop"))
+    if is_pop:
+        # 捏爆有专属成本，不叠加 empty_swap（捏爆本就不要求形成消除）
+        r += REWARD["pop_cost"]
+    elif not result.get("had_match") and not result.get("used_powerup"):
         r += REWARD["empty_swap"]
     r += REWARD["step_cost"]
     last_action_before = int(result.get("last_action_before", -1))
@@ -110,7 +126,9 @@ def compute_reward(prev: GameState, result: dict, nxt: GameState) -> float:
         r += max(0, nxt.total_steps - nxt.steps_used) * REWARD["steps_left_bonus"]
     elif nxt.over:
         r += REWARD["lose_penalty"]
-        deficit = sum(max(0, nxt.task_target - nxt.task_scores.get(s, 0)) for s in nxt.target_shapes)
-        r += deficit * REWARD["task_deficit_penalty"]
+        # 失败缺口 = 形状任务缺口 + 解冻任务缺口
+        shape_deficit = sum(max(0, nxt.task_target - nxt.task_scores.get(s, 0)) for s in nxt.target_shapes)
+        unfreeze_deficit = max(0, nxt.unfreeze_target - nxt.unfreeze_count)
+        r += (shape_deficit + unfreeze_deficit) * REWARD["task_deficit_penalty"]
 
     return r

@@ -12,7 +12,8 @@ const BOARD_CHANNELS = 30;
 export const FRAME_STACK = 3;
 // 堆叠后的 board 通道数
 export const STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK; // 90
-const GLOBAL_DIM = 15;
+// global: 原 15 维 + 解冻任务进度(15) + 是否有解冻任务(16) = 17
+const GLOBAL_DIM = 17;
 
 export const OBS_BOARD_CHANNELS = STACKED_BOARD_CHANNELS;
 export const OBS_GLOBAL_DIM = GLOBAL_DIM;
@@ -86,9 +87,15 @@ export function buildObservation(state) {
     global[8 + i] = targetSet.has(shape) ? 1 : 0;
   });
   const targetProgress = state.targetShapes.map((s) => (state.taskScores[s] || 0) / 4);
-  global[12] = targetProgress.length > 0 ? Math.min(...targetProgress) : 0;
+  // 无形状任务时视为已满足（1.0）
+  global[12] = targetProgress.length > 0 ? Math.min(...targetProgress) : 1;
   global[13] = state.won ? 1 : 0;
-  global[14] = ((state.lastAction ?? -1) + 1) / 180;
+  global[14] = ((state.lastAction ?? -1) + 1) / 280; // 归一化用 MAX_ACTIONS=280
+  // 解冻任务
+  const ut = state.unfreezeTarget ?? 0;
+  const uc = state.unfreezeCount ?? 0;
+  global[15] = ut > 0 ? Math.min(1, uc / ut) : 1;
+  global[16] = ut > 0 ? 1 : 0;
 
   return { board, global };
 }

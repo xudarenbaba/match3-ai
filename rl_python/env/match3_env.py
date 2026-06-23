@@ -7,7 +7,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from match3_engine.actions import build_action_mask, swap_from_action, decode_action
+from match3_engine.actions import build_action_mask, action_to_move, decode_action
 from match3_engine.constants import MAX_ACTIONS, MAX_STEPS, TASK_TARGET, SHAPES, ROWS
 from match3_engine.game import create_game_state, execute_move, snapshot_state
 from match3_engine.layouts import LAYOUT_POOL
@@ -36,31 +36,63 @@ class Match3Env(gym.Env):
         )
         self.action_space = spaces.Discrete(MAX_ACTIONS)
 
-    def _curriculum_options(self) -> dict:
-        if self.curriculum_level <= 1:
-            return {"total_steps": 150, "task_target": 2, "freeze": False}
-        if self.curriculum_level == 2:
-            return {"total_steps": 120, "task_target": 3, "freeze": True}
-        return {"total_steps": MAX_STEPS, "task_target": TASK_TARGET, "freeze": True}
-
-    def _target_shapes(self) -> list:
+    def _pick_shapes(self, n: int) -> list:
         copy_shapes = SHAPES.copy()
         self._rng.shuffle(copy_shapes)
-        if self.curriculum_level <= 1:
-            return [copy_shapes[0]]
-        return copy_shapes[:2]
+        return copy_shapes[:n]
+
+    def _build_task_config(self) -> dict:
+        """随机生成本局任务组合：仅形状 / 仅解冻 / 两者皆有（难度 ≥2）。
+
+        解冻任务需棋盘有足够冰冻格，故解冻任务时提高 frozen_ratio，
+        并令 unfreeze_target 明显小于初始冰冻数，保证任务可完成。
+        """
+        cl = self.curriculum_level
+        if cl <= 1:
+            # 难度1：仅 1 个形状任务，无冰冻、无解冻任务
+            return {
+                "total_steps": 150, "task_target": 2,
+                "target_shapes": self._pick_shapes(1),
+                "unfreeze_target": 0, "frozen_ratio": 0.0, "freeze": False,
+            }
+
+        total_steps = 120 if cl == 2 else MAX_STEPS
+        task_target = 3 if cl == 2 else TASK_TARGET
+        unfreeze_n = 4 if cl == 2 else 6
+        mode = self._rng.choice(["shape", "unfreeze", "both"])
+
+        if mode == "shape":
+            return {
+                "total_steps": total_steps, "task_target": task_target,
+                "target_shapes": self._pick_shapes(2),
+                "unfreeze_target": 0, "frozen_ratio": 0.12, "freeze": True,
+            }
+        if mode == "unfreeze":
+            return {
+                "total_steps": total_steps, "task_target": task_target,
+                "target_shapes": [],  # 明确无形状任务
+                "unfreeze_target": unfreeze_n, "frozen_ratio": 0.20, "freeze": True,
+            }
+        # both
+        return {
+            "total_steps": total_steps, "task_target": task_target,
+            "target_shapes": self._pick_shapes(2),
+            "unfreeze_target": unfreeze_n, "frozen_ratio": 0.20, "freeze": True,
+        }
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         if seed is not None:
             self._rng = random.Random(seed)
-        opts = self._curriculum_options()
+        cfg = self._build_task_config()
         self.state = create_game_state(
             self._rng,
-            total_steps=opts["total_steps"],
-            task_target_shapes=self._target_shapes(),
-            task_target=opts["task_target"],
-            freeze=opts["freeze"],
+            total_steps=cfg["total_steps"],
+            task_target_shapes=cfg["target_shapes"],
+            task_target=cfg["task_target"],
+            freeze=cfg["freeze"],
+            frozen_ratio=cfg["frozen_ratio"],
             curriculum_level=self.curriculum_level,
+            unfreeze_target=cfg["unfreeze_target"],
         )
         frame = build_observation(self.state)
         self._frame_buffer = [frame]
@@ -71,21 +103,21 @@ class Match3Env(gym.Env):
     def step(self, action: int) -> Tuple[dict, float, bool, bool, dict]:
         prev = snapshot_state(self.state)
         layout = self.state.layout
-        swap = swap_from_action(self.state.board, int(action), layout)
-        if swap is None:
+        move = action_to_move(self.state.board, int(action), layout)
+        if move is None:
             mask = build_action_mask(self.state.board, layout)
             valid_idx = np.where(mask > 0)[0]
             if len(valid_idx) == 0:
                 obs = stack_observations(self._frame_buffer)
                 return obs, -1.0, True, False, {"action_mask": mask, "invalid": True}
             action = int(valid_idx[0])
-            swap = decode_action(action)
-            if swap is None:
+            move = decode_action(action)
+            if move is None:
                 obs = stack_observations(self._frame_buffer)
                 return obs, -1.0, True, False, {"action_mask": mask, "invalid": True}
 
-        move = execute_move(self.state, self._rng, swap["from"], swap["to"])
-        result = move["result"]
+        exec_res = execute_move(self.state, self._rng, move)
+        result = exec_res["result"]
         result["action_index"] = int(action)
         reward = compute_reward(prev, result, self.state)
 

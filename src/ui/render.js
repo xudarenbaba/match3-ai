@@ -11,6 +11,7 @@ import {
   createGameState,
   cloneBoard,
   simulateSwap,
+  simulatePop,
   commitPreparedMove,
   boardDiffChangedCells,
   isPowerup,
@@ -24,6 +25,7 @@ const chainEl = () => document.getElementById('chain-score');
 const movesEl = () => document.getElementById('moves');
 const remainEl = () => document.getElementById('steps-left');
 const specialEl = () => document.getElementById('special-panel');
+const unfreezeEl = () => document.getElementById('unfreeze-panel');
 const statusEl = () => document.getElementById('status');
 const logEl = () => document.getElementById('log');
 const btnAi = () => document.getElementById('btn-ai');
@@ -43,8 +45,26 @@ const TIMINGS = {
   pauseBetweenChains: 250,
 };
 
+/**
+ * 随机生成本局任务配置，对齐 Python 侧 Match3Env._build_task_config() 逻辑。
+ * 三种模式等概率：仅形状任务 / 仅解冻任务 / 两者皆有。
+ */
+function buildTaskOptions() {
+  const roll = Math.random();
+  if (roll < 1 / 3) {
+    // 仅形状任务
+    return { targetShapes: null, unfreezeTarget: 0, frozenRatio: 0.12 };
+  } else if (roll < 2 / 3) {
+    // 仅解冻任务（targetShapes=[] 表示无形状任务）
+    return { targetShapes: [], unfreezeTarget: 6, frozenRatio: 0.20 };
+  } else {
+    // 两者皆有
+    return { targetShapes: null, unfreezeTarget: 6, frozenRatio: 0.20 };
+  }
+}
+
 export async function initApp() {
-  state = createGameState();
+  state = createGameState(buildTaskOptions());
   rlReady = await checkRlServer();
   renderAll();
   bindEvents();
@@ -59,7 +79,7 @@ export async function initApp() {
 function bindEvents() {
   btnAi()?.addEventListener('click', onAiMove);
   btnNew()?.addEventListener('click', () => {
-    state = createGameState();
+    state = createGameState(buildTaskOptions());
     resetFrameHistory();
     log('新一局开始');
     renderAll();
@@ -154,18 +174,39 @@ function renderHud() {
   if (movesEl()) movesEl().textContent = `${state.stepsUsed}/${state.totalSteps}`;
   if (remainEl()) remainEl().textContent = String(left);
 
+  // 解冻任务进度
+  const up = unfreezeEl();
+  if (up) {
+    const ut = state.unfreezeTarget ?? 0;
+    if (ut > 0) {
+      const uc = state.unfreezeCount ?? 0;
+      const done = uc >= ut;
+      up.innerHTML = `
+        <div class="special-row is-unfreeze ${done ? 'done' : ''}">
+          <span class="special-icon icon-ice"></span>
+          <span>解冻冰壳</span>
+          <span class="special-val">${uc} / ${ut}</span>
+          <span class="badge badge-ice">解冻</span>
+        </div>
+      `;
+    } else {
+      up.innerHTML = '';
+    }
+  }
+
   const sp = specialEl();
   if (sp) {
-    sp.innerHTML = SHAPES.map((shape) => {
+    // 只显示作为目标的形状；纯解冻任务时形状面板为空
+    const targetShapes = SHAPES.filter((s) => state.targetShapes.includes(s));
+    sp.innerHTML = targetShapes.map((shape) => {
       const task = state.taskScores[shape] || 0;
-      const isTarget = state.targetShapes.includes(shape);
-      const done = isTarget && task >= TASK_TARGET;
+      const done = task >= TASK_TARGET;
       return `
-        <div class="special-row ${isTarget ? 'is-target' : ''} ${done ? 'done' : ''}">
+        <div class="special-row is-target ${done ? 'done' : ''}">
           <span class="special-icon ${shapeClass(shape)}"></span>
           <span>${SHAPE_NAMES[shape]}</span>
-          <span class="special-val">${task}${isTarget ? ` / ${TASK_TARGET}` : ''}</span>
-          ${isTarget ? '<span class="badge">目标</span>' : ''}
+          <span class="special-val">${task} / ${TASK_TARGET}</span>
+          <span class="badge">目标</span>
         </div>
       `;
     }).join('');
@@ -174,7 +215,7 @@ function renderHud() {
   const st = statusEl();
   if (st) {
     if (state.won) {
-      st.textContent = '🎉 通关！目标图形任务达成';
+      st.textContent = '🎉 通关！全部任务达成';
       st.className = 'status win';
     } else if (state.over) {
       st.textContent = '⏹ 步数用尽，本局结束';
@@ -183,8 +224,15 @@ function renderHud() {
       st.textContent = 'RL 推理服务未连接 — 请先启动 predict_server.py';
       st.className = 'status lose';
     } else {
-      const names = state.targetShapes.map((s) => SHAPE_NAMES[s]).join('、');
-      st.textContent = `RL 已连接 · 目标：${names} 任务分各达 ${TASK_TARGET} · 剩余 ${left} 步`;
+      const parts = [];
+      if (state.targetShapes.length > 0) {
+        const names = state.targetShapes.map((s) => SHAPE_NAMES[s]).join('、');
+        parts.push(`目标 ${names} 各达 ${TASK_TARGET}`);
+      }
+      if ((state.unfreezeTarget ?? 0) > 0) {
+        parts.push(`解冻 ${state.unfreezeCount ?? 0}/${state.unfreezeTarget}`);
+      }
+      st.textContent = `RL 已连接 · ${parts.join(' + ')} · 剩余 ${left} 步`;
       st.className = 'status';
     }
   }
@@ -232,17 +280,20 @@ async function onAiMove() {
     if (!state.over) btnAi()?.removeAttribute('disabled');
     return;
   }
-  if (!move?.from || !move?.to) {
+  const isPop = move?.type === 'pop';
+  const validMove = isPop
+    ? Number.isInteger(move.r) && Number.isInteger(move.c)
+    : move?.from && move?.to;
+  if (!validMove) {
     log('RL 未返回有效走法');
     busy = false;
     if (!state.over) btnAi()?.removeAttribute('disabled');
     return;
   }
 
-  const preview = simulateSwap(state.board, move.from, move.to, {
-    captureBoards: true,
-    includeFinalBoard: true,
-  }, state.layout || null);
+  const preview = isPop
+    ? simulatePop(state.board, move.r, move.c, { captureBoards: true, includeFinalBoard: true }, state.layout || null, state.targetShapes)
+    : simulateSwap(state.board, move.from, move.to, { captureBoards: true, includeFinalBoard: true }, state.layout || null, state.targetShapes);
   if (!preview?.finalBoard) {
     log('预演失败，本次跳过');
     busy = false;
@@ -250,12 +301,19 @@ async function onAiMove() {
     return;
   }
 
-  const fromLabel = `(${move.from.r + 1},${move.from.c + 1})`;
-  const toLabel = `(${move.to.r + 1},${move.to.c + 1})`;
-  lastHighlight = { from: move.from, to: move.to };
+  let actionLabel;
+  if (isPop) {
+    actionLabel = `捏爆 (${move.r + 1},${move.c + 1})`;
+    lastHighlight = { from: { r: move.r, c: move.c }, to: { r: move.r, c: move.c } };
+  } else {
+    const fromLabel = `(${move.from.r + 1},${move.from.c + 1})`;
+    const toLabel = `(${move.to.r + 1},${move.to.c + 1})`;
+    actionLabel = `交换 ${fromLabel} ↔ ${toLabel}`;
+    lastHighlight = { from: move.from, to: move.to };
+  }
 
   renderGrid(state.board, { highlight: lastHighlight, phaseClass: 'phase-pick' });
-  log(`准备交换 ${fromLabel} ↔ ${toLabel}`);
+  log(`准备${actionLabel}`);
   await sleep(TIMINGS.showPick);
 
   if (preview.afterSwapBoard) {
@@ -265,6 +323,12 @@ async function onAiMove() {
 
   let previousBoard = preview.afterSwapBoard ? cloneBoard(preview.afterSwapBoard) : cloneBoard(state.board);
   for (const step of preview.steps || []) {
+    if (step.type === 'pop' && step.boardAfterPop) {
+      renderGrid(step.boardAfterPop, { powerCells: step.popped ? [step.popped] : [], phaseClass: 'phase-power' });
+      await sleep(TIMINGS.showPowerup);
+      previousBoard = cloneBoard(step.boardAfterPop);
+      continue;
+    }
     if (step.type === 'powerup' && step.boardAfterPowerup) {
       // upgraded: 升到 L2 的格（高亮）；cleared: 升到 L3 消失的格（高亮）
       const powerCells = [];
@@ -297,12 +361,13 @@ async function onAiMove() {
     }
   }
 
-  const res = commitPreparedMove(state, move.from, move.to, preview, preview.finalBoard);
+  const res = commitPreparedMove(state, move, preview, preview.finalBoard);
   if (res.ok) {
-    const base = `交换 ${fromLabel}↔${toLabel} +${res.result.totalScore} 分`;
+    const base = `${actionLabel} +${res.result.totalScore} 分`;
     const chain = res.result.chainScore > 0 ? `（连锁 +${res.result.chainScore}）` : '';
     const power = (res.result.steps || []).some((s) => s.type === 'powerup') ? ' · 触发道具' : '';
-    log(`${base}${chain}${power} · ${move.reason}`);
+    const unfz = res.result.unfrozenCount > 0 ? ` · 解冻 ${res.result.unfrozenCount}` : '';
+    log(`${base}${chain}${power}${unfz} · ${move.reason}`);
   }
 
   lastHighlight = null;

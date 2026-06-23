@@ -28,6 +28,8 @@ export function serializeState(state) {
     taskTarget: state.taskTarget ?? 4,
     won: state.won,
     over: state.over,
+    unfreezeTarget: state.unfreezeTarget ?? 0,
+    unfreezeCount: state.unfreezeCount ?? 0,
   };
 }
 
@@ -72,7 +74,11 @@ export async function findRlMove(state) {
     throw new Error(msg);
   }
   const data = await res.json();
+  if (data.type === 'pop') {
+    return { type: 'pop', r: data.r, c: data.c, reason: data.reason || 'RL 捏爆' };
+  }
   return {
+    type: 'swap',
     from: data.from,
     to: data.to,
     reason: data.reason || 'RL 策略',

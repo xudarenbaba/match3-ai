@@ -12,7 +12,8 @@ BOARD_CHANNELS = 30
 FRAME_STACK = 3
 # 堆叠后送入网络的 board 通道数
 STACKED_BOARD_CHANNELS = BOARD_CHANNELS * FRAME_STACK  # 90
-GLOBAL_DIM = 15
+# global: 原 15 维 + 解冻任务进度(15) + 是否有解冻任务(16) = 17
+GLOBAL_DIM = 17
 
 
 def build_observation(state: GameState) -> dict:
@@ -66,9 +67,15 @@ def build_observation(state: GameState) -> dict:
         global_vec[4 + i] = state.task_scores.get(shape, 0) / 4.0
         global_vec[8 + i] = 1.0 if shape in target_set else 0.0
     target_progress = [state.task_scores.get(s, 0) / 4.0 for s in state.target_shapes]
-    global_vec[12] = min(target_progress) if target_progress else 0.0
+    # 无形状任务时视为已满足（1.0），避免空 min 误导网络
+    global_vec[12] = min(target_progress) if target_progress else 1.0
     global_vec[13] = 1.0 if state.won else 0.0
-    global_vec[14] = (state.last_action + 1) / 180.0
+    global_vec[14] = (state.last_action + 1) / 280.0  # 归一化用 MAX_ACTIONS=280
+    # ── 解冻任务 ──────────────────────────────────────────────────
+    ut = getattr(state, "unfreeze_target", 0)
+    uc = getattr(state, "unfreeze_count", 0)
+    global_vec[15] = min(1.0, uc / ut) if ut > 0 else 1.0  # 解冻进度（无任务=1.0已满足）
+    global_vec[16] = 1.0 if ut > 0 else 0.0                # 是否有解冻任务
 
     return {"board": board, "global": global_vec}
 

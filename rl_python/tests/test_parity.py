@@ -23,6 +23,7 @@ from match3_engine.cells import NormalCell, PowerCell
 from match3_engine.board import create_empty_board
 from match3_engine.match import find_matches, pick_merge_positions, apply_merges
 from match3_engine.powerup import powerup_upgrade_targets
+from match3_engine.actions import get_adjacent_swaps, build_action_mask, encode_pop
 
 JS_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parity_js.mjs")
 
@@ -94,6 +95,28 @@ def build_py_results() -> dict:
     l2 = sum(1 for r in range(10) for c in range(10) if b[r][c] and b[r][c].level == 2)
     gone = sum(1 for r in range(10) for c in range(10) if b[r][c] is None)
     out["E_colorUpgrade"] = {"special": sp, "cleared": cl, "l2count": l2, "goneCount": gone}
+
+    # 场景F：冰冻锁定 + 捏爆 mask（确定性）
+    SHP = ["circle", "square", "triangle", "star"]
+    b = create_empty_board()
+    for r in range(10):
+        for c in range(10):
+            b[r][c] = N(SHP[(r + c) % 4], 1)
+    b[5][5] = NormalCell(shape="circle", level=1, frozen=True)
+    b[3][3] = PowerCell(shape="circle", powerup_type="bomb")
+    swaps = get_adjacent_swaps(b, None)
+    frozen_in_swaps = any(
+        (s["from"]["r"] == 5 and s["from"]["c"] == 5) or (s["to"]["r"] == 5 and s["to"]["c"] == 5)
+        for s in swaps
+    )
+    mask = build_action_mask(b, None)
+    poppable = int(sum(1 for a in range(180, 280) if mask[a] > 0.5))
+    out["F_lock"] = {
+        "frozenInSwaps": frozen_in_swaps,
+        "poppableCount": poppable,
+        "frozenPoppable": bool(mask[encode_pop(5, 5)] > 0.5),
+        "powerupPoppable": bool(mask[encode_pop(3, 3)] > 0.5),
+    }
 
     return out
 

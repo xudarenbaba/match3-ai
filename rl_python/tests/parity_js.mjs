@@ -5,9 +5,11 @@ import { dirname, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const coreDir = resolve(__dirname, '../../src/core');
+const actionsDir = resolve(__dirname, '../../src/actions');
 
 const { findMatches, pickMergePositions, applyMerges } = await import(resolve(coreDir, 'match.js'));
 const { applyPowerupEffect } = await import(resolve(coreDir, 'powerup.js'));
+const { getAdjacentSwaps, buildActionMask, encodePop } = await import(resolve(actionsDir, 'encoding.js'));
 
 const N = (shape, level) => ({ kind: 'normal', shape, level, frozen: false });
 const P = (shape, powerupType) => ({ kind: 'powerup', shape, powerupType, level: 3, frozen: false });
@@ -82,6 +84,29 @@ const out = {};
     if (!cell) l3gone++;
   }
   out.E_colorUpgrade = { special: res.specialGained, cleared: res.clearedByShape, l2count: l2, goneCount: l3gone };
+}
+
+// ── 场景F：冰冻锁定 + 捏爆 mask（确定性）──
+{
+  const b = empty();
+  const shapes = ['circle', 'square', 'triangle', 'star'];
+  for (let r = 0; r < 10; r++) for (let c = 0; c < 10; c++) b[r][c] = N(shapes[(r + c) % 4], 1);
+  b[5][5] = { kind: 'normal', shape: 'circle', level: 1, frozen: true }; // 冰冻格
+  b[3][3] = { kind: 'powerup', shape: 'circle', powerupType: 'bomb', level: 3, frozen: false }; // 道具
+
+  const swaps = getAdjacentSwaps(b, null);
+  const frozenInSwaps = swaps.some(
+    (s) => (s.from.r === 5 && s.from.c === 5) || (s.to.r === 5 && s.to.c === 5)
+  );
+  const mask = buildActionMask(b, null);
+  let poppable = 0;
+  for (let a = 180; a < 280; a++) if (mask[a]) poppable++;
+  out.F_lock = {
+    frozenInSwaps,
+    poppableCount: poppable,
+    frozenPoppable: Boolean(mask[encodePop(5, 5)]),
+    powerupPoppable: Boolean(mask[encodePop(3, 3)]),
+  };
 }
 
 console.log(JSON.stringify(out, null, 2));

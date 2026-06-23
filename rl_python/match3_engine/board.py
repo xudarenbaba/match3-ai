@@ -25,6 +25,11 @@ def in_bounds(r: int, c: int) -> bool:
     return 0 <= r < ROWS and 0 <= c < COLS
 
 
+def count_frozen(board: Board) -> int:
+    """统计棋盘上冰冻格数量。用于解冻任务计数（操作前后差值=本步解冻数）。"""
+    return sum(1 for row in board for cell in row if cell and cell.frozen)
+
+
 def cells_equal(a: Optional[Cell], b: Optional[Cell]) -> bool:
     if a is None and b is None:
         return True

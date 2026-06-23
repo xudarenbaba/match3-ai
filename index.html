@@ -10,7 +10,7 @@
   <div class="app">
     <header class="header">
       <h1>AI 消消乐</h1>
-      <p class="subtitle">10×10 网格 · 100 步上限 · 随机道具（列消 / 九宫格 / 同形全消）</p>
+      <p class="subtitle">10×10 网格 · 100 步上限 · 升级道具（行 / 列 / 同形）+ 捏爆 + 冰冻解锁</p>
     </header>
 
     <main class="main">
@@ -25,15 +25,22 @@
 
         <section class="panel">
           <h2>任务进度</h2>
-          <p class="hint">目标图形任务分各达 4 即通关；每次二级合并（3×二级格消除）+1 任务分</p>
+          <p class="hint">
+            本局可能含两类任务（需全部达成才通关）：<br />
+            · <strong>形状任务</strong>：目标图形合到最高级（L2）各达 4 次<br />
+            · <strong>解冻任务</strong>：解除指定数量的冰壳（解除即计数）
+          </p>
+          <div id="unfreeze-panel" class="unfreeze-panel"></div>
           <div id="special-panel" class="special-panel"></div>
         </section>
 
         <section class="panel">
-          <h2>道具规则</h2>
+          <h2>道具与捏爆规则</h2>
           <p class="hint">
-            道具随机出现。列消：清一列；炸弹：清 3×3；同形：清全局同类型。<br />
-            道具消除得分=消除格数；单次消除 ≥9 格额外 +1 对应图形任务分。
+            <strong>道具（升级效果）</strong>：行/列 4 连消生成 → 该行/列其余格等级 +1；
+            同形 5 连消生成 → 全图同形格等级 +1。升到最高级的目标格即完成任务并消失。<br />
+            <strong>捏爆</strong>：直接清掉一个普通非冰冻格（消耗 1 步、不解冻），为下一步创造大消除机会。<br />
+            <strong>冰冻格</strong>：不可移动 / 合并 / 捏爆，只能靠相邻消除解锁。
           </p>
         </section>
 

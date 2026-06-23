@@ -71,17 +71,20 @@ The browser's "RL 出手" button POSTs to `http://127.0.0.1:8765/predict`. This 
 
 ## Observation / network
 
-Observation is `Dict{board: (90,10,10), global: (15,)}` — 30 channels/frame × 3 stacked frames. Channel 12-15 are powerup types `row/column/bomb/color` (must match `POWERUP_TYPES` order). Changing `BOARD_CHANNELS` requires retraining. Training uses a custom CNN extractor `train/features.py:Match3CnnExtractor` (two 3×3 convs over board, concatenated with global).
+Observation is `Dict{board: (90,10,10), global: (17,)}` — 30 channels/frame × 3 stacked frames. Channel 12-15 are powerup types `row/column/bomb/color` (must match `POWERUP_TYPES` order). Global dims 15-16 are unfreeze-task progress + flag. Changing `BOARD_CHANNELS`/`GLOBAL_DIM`/`MAX_ACTIONS` requires retraining. Training uses a custom CNN extractor `train/features.py:Match3CnnExtractor` (two 3×3 convs over board, concatenated with global).
 
 ## Trained model in git
 
-`rl_python/runs/ppo_match3_v1/final_model.zip` and `runs/ppo_match3_v1/best/` are **committed to git** (trained under an older 29-channel observation, before the powerup-upgrade rework and CNN extractor). It is **incompatible** with current code (30-channel board + CNN). A full retrain targeting `runs/ppo_match3_v2/` is required. `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
+Older models (`ppo_match3_v1/v2/v3`) are **incompatible** — action space, observation, and rules have all changed. A full retrain targeting `runs/ppo_match3_v4/` is required. `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
 
 ## Action space
 
-180-dimensional Discrete:
+280-dimensional Discrete:
 - 0–89: horizontal swaps — `action = row * 9 + col`
 - 90–179: vertical swaps — `action = 90 + row * 10 + col`
+- 180–279: pop (捏爆) — `action = 180 + row * 10 + col` (clears one normal non-frozen cell)
+
+Frozen cells cannot be swapped or popped; only adjacent merges unfreeze them.
 
 ## No linters, no type checkers, no formatters configured
 

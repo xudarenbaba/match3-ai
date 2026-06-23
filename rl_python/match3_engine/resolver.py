@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Optional
 
-from .board import Board, clone_board
+from .board import Board, clone_board, count_frozen
 from .cells import is_powerup
 from .match import find_matches, pick_merge_positions, apply_merges
 from .gravity import apply_gravity_and_refill
@@ -156,10 +156,56 @@ def try_swap(
     layout: Optional[list] = None,
     target_shapes: Optional[list] = None,
 ) -> dict:
+    before_frozen = count_frozen(board)
     swap_cells(board, fr, to)
     power_res = _resolve_powerup_swap(board, rng, fr, to, layout, target_shapes)
     if power_res["used_powerup"]:
+        power_res["unfrozen_count"] = before_frozen - count_frozen(board)
+        power_res["is_pop"] = False
         return power_res
     normal_res = resolve_board(board, rng, fr, to, layout, target_shapes)
     normal_res["task_from_powerup"] = {}
+    normal_res["unfrozen_count"] = before_frozen - count_frozen(board)
+    normal_res["is_pop"] = False
     return normal_res
+
+
+def pop_cell(
+    board: Board,
+    rng: random.Random,
+    r: int,
+    c: int,
+    layout: Optional[list] = None,
+    target_shapes: Optional[list] = None,
+) -> dict:
+    """捏爆：直接清空一个普通非冰冻格，不解冻相邻冰壳。
+    清空后重力补位并结算连锁（连锁消除按正常规则解冻、计任务分）。
+    """
+    empty_result = {
+        "total_score": 0, "chain_score": 0, "special_gained": {}, "cleared_by_shape": {},
+        "merge_events": [], "had_match": False, "used_powerup": False,
+        "task_from_powerup": {}, "unfrozen_count": 0, "is_pop": True, "popped": False,
+    }
+    cell = board[r][c]
+    if cell is None or cell.kind != "normal" or cell.frozen:
+        return empty_result  # 非法捏爆（mask 应已禁止）
+
+    before_frozen = count_frozen(board)
+    board[r][c] = None  # 清空，不触发相邻解冻
+    apply_gravity_and_refill(board, rng, layout)
+    chain = resolve_board(board, rng, None, None, layout, target_shapes)
+
+    return {
+        "total_score": chain["total_score"],
+        "chain_score": chain["chain_score"],
+        "special_gained": chain["special_gained"],
+        "cleared_by_shape": chain["cleared_by_shape"],
+        "merge_events": chain["merge_events"],
+        "had_match": chain["had_match"],
+        "used_powerup": False,
+        "task_from_powerup": {},
+        # 捏爆本身不解冻；解冻仅来自捏爆引发的连锁消除
+        "unfrozen_count": before_frozen - count_frozen(board),
+        "is_pop": True,
+        "popped": True,
+    }

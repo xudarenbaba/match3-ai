@@ -1,8 +1,8 @@
 import { SHAPES, MAX_STEPS, INITIAL_FROZEN_RATIO } from './constants.js';
 import { cloneBoard, createEmptyBoard } from './board.js';
 import { reshuffleBoard, freezeRandomCells } from './gravity.js';
-import { trySwap } from './resolver.js';
-import { encodeSwap } from '../actions/encoding.js';
+import { trySwap, popCell } from './resolver.js';
+import { encodeSwap, encodePop } from '../actions/encoding.js';
 import { getLayout, pickLayout, LAYOUT_POOL } from './layouts.js';
 
 export function pickTwoShapes() {
@@ -18,7 +18,8 @@ export function pickTwoShapes() {
  * options.curriculumLevel: 1/2/3，影响布局池，默认 3
  */
 export function createGameState(options = {}) {
-  const targetShapes = options.targetShapes || pickTwoShapes();
+  // null/undefined = 默认随机 2 个形状；[] = 明确无形状任务（仅解冻任务）
+  const targetShapes = options.targetShapes == null ? pickTwoShapes() : [...options.targetShapes];
 
   // 布局选择
   const curriculumLevel = options.curriculumLevel ?? 3;
@@ -45,6 +46,9 @@ export function createGameState(options = {}) {
     won: false,
     over: false,
     history: [],
+    // 解冻任务：需解冻 unfreezeTarget 个冰壳；0 = 无解冻任务
+    unfreezeTarget: options.unfreezeTarget ?? 0,
+    unfreezeCount: 0,
   };
 }
 
@@ -58,19 +62,35 @@ function applyTaskProgress(state, result) {
 }
 
 export function checkVictory(state, taskTarget = 4) {
-  return state.targetShapes.every((s) => (state.taskScores[s] || 0) >= taskTarget);
+  // 形状任务与解冻任务可组合，均满足才胜利。空任务视为已满足。
+  const shapeOk =
+    state.targetShapes.length === 0 ||
+    state.targetShapes.every((s) => (state.taskScores[s] || 0) >= taskTarget);
+  const unfreezeOk =
+    (state.unfreezeTarget ?? 0) === 0 || (state.unfreezeCount ?? 0) >= state.unfreezeTarget;
+  return shapeOk && unfreezeOk;
 }
 
-export function executeMove(state, from, to) {
+/** 执行一个 move（统一接口）：{type:'swap',from,to} 或 {type:'pop',r,c} */
+export function executeMove(state, move) {
   if (state.over) return { ok: false, reason: '本局已结束' };
-  const result = trySwap(state.board, from, to, {}, state.layout, state.targetShapes);
+  let result;
+  let actionIdx;
+  if (move.type === 'pop') {
+    result = popCell(state.board, move.r, move.c, {}, state.layout, state.targetShapes);
+    actionIdx = encodePop(move.r, move.c);
+  } else {
+    result = trySwap(state.board, move.from, move.to, {}, state.layout, state.targetShapes);
+    actionIdx = encodeSwap(move.from, move.to);
+  }
 
   state.score += result.totalScore;
   state.chainScoreTotal += result.chainScore;
   applyTaskProgress(state, result);
+  state.unfreezeCount = (state.unfreezeCount || 0) + (result.unfrozenCount || 0);
   state.stepsUsed += 1;
-  state.lastAction = encodeSwap(from, to);
-  state.history.push({ from, to, ...result });
+  state.lastAction = actionIdx;
+  state.history.push({ move, ...result });
 
   if (checkVictory(state)) {
     state.won = true;
@@ -89,7 +109,7 @@ export function simulateSwapWithTargets(board, from, to, options = {}, layout = 
   return result;
 }
 
-export function commitPreparedMove(state, from, to, preparedResult, finalBoard) {
+export function commitPreparedMove(state, move, preparedResult, finalBoard) {
   if (!preparedResult || !finalBoard) return { ok: false, reason: '预演数据不完整' };
   if (state.over) return { ok: false, reason: '本局已结束' };
 
@@ -97,9 +117,10 @@ export function commitPreparedMove(state, from, to, preparedResult, finalBoard) 
   state.score += preparedResult.totalScore;
   state.chainScoreTotal += preparedResult.chainScore;
   applyTaskProgress(state, preparedResult);
+  state.unfreezeCount = (state.unfreezeCount || 0) + (preparedResult.unfrozenCount || 0);
   state.stepsUsed += 1;
-  state.lastAction = encodeSwap(from, to);
-  state.history.push({ from, to, ...preparedResult });
+  state.lastAction = move.type === 'pop' ? encodePop(move.r, move.c) : encodeSwap(move.from, move.to);
+  state.history.push({ move, ...preparedResult });
 
   if (checkVictory(state)) {
     state.won = true;

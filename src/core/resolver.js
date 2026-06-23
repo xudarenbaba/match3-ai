@@ -1,4 +1,4 @@
-import { cloneBoard } from './board.js';
+import { cloneBoard, countFrozen } from './board.js';
 import { isPowerup } from './cells.js';
 import { findMatches, pickMergePositions, applyMerges } from './match.js';
 import { applyGravityAndRefill } from './gravity.js';
@@ -135,21 +135,81 @@ function resolvePowerupSwap(board, from, to, captureBoards = false, layout = nul
 }
 
 export function trySwap(board, from, to, options = {}, layout = null, targetShapes = null) {
+  const beforeFrozen = countFrozen(board);
   swapCells(board, from, to);
   const afterSwapBoard = options.captureBoards ? cloneBoard(board) : null;
 
   const powerRes = resolvePowerupSwap(board, from, to, options.captureBoards, layout, targetShapes);
   if (powerRes.usedPowerup) {
-    return { success: true, afterSwapBoard, ...powerRes };
+    return { success: true, afterSwapBoard, unfrozenCount: beforeFrozen - countFrozen(board), isPop: false, ...powerRes };
   }
 
   const normalRes = resolveBoard(board, from, to, options, layout, targetShapes);
-  return { success: true, afterSwapBoard, taskFromPowerup: {}, ...normalRes };
+  return {
+    success: true,
+    afterSwapBoard,
+    taskFromPowerup: {},
+    unfrozenCount: beforeFrozen - countFrozen(board),
+    isPop: false,
+    ...normalRes,
+  };
+}
+
+/**
+ * 捏爆：直接清空一个普通非冰冻格，不解冻相邻冰壳。
+ * 清空后重力补位并结算连锁（连锁消除按正常规则解冻、计任务分）。
+ */
+export function popCell(board, r, c, options = {}, layout = null, targetShapes = null) {
+  const cell = board[r][c];
+  if (!cell || cell.kind !== 'normal' || cell.frozen) {
+    return {
+      success: false, usedPowerup: false, totalScore: 0, chainScore: 0,
+      specialGained: {}, taskFromPowerup: {}, steps: [], hadMatch: false,
+      unfrozenCount: 0, isPop: true, popped: false,
+    };
+  }
+
+  const beforeFrozen = countFrozen(board);
+  board[r][c] = null; // 清空，不触发相邻解冻
+  const steps = [];
+  if (options.captureBoards) {
+    steps.push({ type: 'pop', popped: { r, c }, boardAfterPop: cloneBoard(board) });
+  }
+  applyGravityAndRefill(board, layout);
+  if (options.captureBoards) {
+    steps.push({ type: 'refill', boardAfterRefill: cloneBoard(board) });
+  }
+
+  const chain = resolveBoard(board, null, null, options, layout, targetShapes);
+  steps.push(...chain.steps);
+
+  return {
+    success: true,
+    usedPowerup: false,
+    totalScore: chain.totalScore,
+    chainScore: chain.chainScore,
+    specialGained: chain.specialGained,
+    taskFromPowerup: {},
+    steps,
+    hadMatch: chain.hadMatch,
+    // 捏爆本身不解冻；解冻仅来自连锁消除
+    unfrozenCount: beforeFrozen - countFrozen(board),
+    isPop: true,
+    popped: true,
+  };
 }
 
 export function simulateSwap(board, from, to, options = {}, layout = null, targetShapes = null) {
   const sim = cloneBoard(board);
   const result = trySwap(sim, from, to, options, layout, targetShapes);
+  if (options.includeFinalBoard) return { ...result, finalBoard: cloneBoard(sim) };
+  return result;
+}
+
+/** 捏爆的模拟版本（前端预演用）。 */
+export function simulatePop(board, r, c, options = {}, layout = null, targetShapes = null) {
+  const sim = cloneBoard(board);
+  const result = popCell(sim, r, c, options, layout, targetShapes);
   if (options.includeFinalBoard) return { ...result, finalBoard: cloneBoard(sim) };
   return result;
 }

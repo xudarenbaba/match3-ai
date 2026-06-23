@@ -8,7 +8,7 @@ from .board import Board, clone_board, create_empty_board
 from .constants import SHAPES, MAX_STEPS, TASK_TARGET
 from .gravity import reshuffle_board, freeze_random_cells
 from .layouts import get_layout, pick_layout, LAYOUT_POOL
-from .resolver import try_swap
+from .resolver import try_swap, pop_cell
 
 
 @dataclass
@@ -26,6 +26,9 @@ class GameState:
     over: bool = False
     layout: Optional[list] = None        # 10×10 的 0/1 列表，None 表示全 1
     layout_name: str = "full"
+    # 解冻任务：需解冻 unfreeze_target 个冰壳；0 表示本局无解冻任务
+    unfreeze_target: int = 0
+    unfreeze_count: int = 0
 
 
 def pick_two_shapes(rng: random.Random) -> List[str]:
@@ -44,8 +47,13 @@ def create_game_state(
     frozen_ratio: float = 0.12,
     layout_name: Optional[str] = None,
     curriculum_level: int = 3,
+    unfreeze_target: int = 0,
 ) -> GameState:
-    target_shapes = task_target_shapes or pick_two_shapes(rng)
+    # None = 未指定（默认随机 2 个形状）；[] = 明确无形状任务（仅解冻任务）
+    if task_target_shapes is None:
+        target_shapes = pick_two_shapes(rng)
+    else:
+        target_shapes = list(task_target_shapes)
 
     # 布局选择
     pool = LAYOUT_POOL.get(curriculum_level, LAYOUT_POOL[3])
@@ -65,6 +73,8 @@ def create_game_state(
         task_scores={s: 0 for s in SHAPES},
         layout=layout,
         layout_name=chosen_layout_name,
+        unfreeze_target=unfreeze_target,
+        unfreeze_count=0,
     )
 
 
@@ -83,12 +93,19 @@ def snapshot_state(state: GameState) -> GameState:
         over=state.over,
         layout=state.layout,
         layout_name=state.layout_name,
+        unfreeze_target=state.unfreeze_target,
+        unfreeze_count=state.unfreeze_count,
     )
 
 
 def check_victory(state: GameState, task_target: Optional[int] = None) -> bool:
+    """形状任务与解冻任务可组合，均满足才胜利。空任务视为已满足。"""
     target = task_target if task_target is not None else state.task_target
-    return all(state.task_scores.get(s, 0) >= target for s in state.target_shapes)
+    shape_ok = (not state.target_shapes) or all(
+        state.task_scores.get(s, 0) >= target for s in state.target_shapes
+    )
+    unfreeze_ok = state.unfreeze_target == 0 or state.unfreeze_count >= state.unfreeze_target
+    return shape_ok and unfreeze_ok
 
 
 def _apply_task_progress(state: GameState, result: dict) -> None:
@@ -98,14 +115,22 @@ def _apply_task_progress(state: GameState, result: dict) -> None:
         state.task_scores[shape] = state.task_scores.get(shape, 0) + n
 
 
-def execute_move(state: GameState, rng: random.Random, fr: dict, to: dict) -> dict:
+def execute_move(state: GameState, rng: random.Random, move: dict) -> dict:
+    """执行一个 move（统一接口）：
+      {"type":"swap", "from":{r,c}, "to":{r,c}}  → 交换
+      {"type":"pop",  "r":r, "c":c}              → 捏爆
+    """
     if state.over:
         return {"ok": False, "reason": "game over"}
-    result = try_swap(state.board, rng, fr, to, state.layout, state.target_shapes)
+    if move.get("type") == "pop":
+        result = pop_cell(state.board, rng, move["r"], move["c"], state.layout, state.target_shapes)
+    else:
+        result = try_swap(state.board, rng, move["from"], move["to"], state.layout, state.target_shapes)
     result["last_action_before"] = state.last_action
     state.score += result["total_score"]
     state.chain_score_total += result["chain_score"]
     _apply_task_progress(state, result)
+    state.unfreeze_count += int(result.get("unfrozen_count", 0))
     state.steps_used += 1
     state.last_action = int(result.get("action_index", -1))
     if check_victory(state):

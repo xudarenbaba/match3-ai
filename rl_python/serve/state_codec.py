@@ -56,4 +56,6 @@ def json_to_game_state(data: dict) -> GameState:
         over=bool(data.get("over", False)),
         layout=layout,
         layout_name=layout_name,
+        unfreeze_target=int(data.get("unfreezeTarget", 0)),
+        unfreeze_count=int(data.get("unfreezeCount", 0)),
     )

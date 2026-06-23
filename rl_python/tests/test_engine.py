@@ -24,8 +24,56 @@ def test_create_and_step():
     mask = build_action_mask(state.board, state.layout)
     assert mask.sum() > 0
     swap = swaps[0]
-    res = execute_move(state, rng, swap["from"], swap["to"])
+    # execute_move 现接受统一 move 结构
+    res = execute_move(state, rng, {"type": "swap", "from": swap["from"], "to": swap["to"]})
     assert res["ok"]
+
+
+def test_pop_action():
+    """捏爆：清空普通非冰冻格，不解冻相邻冰壳。"""
+    from match3_engine.cells import NormalCell
+    from match3_engine.board import create_empty_board
+    from match3_engine.game import GameState
+    from match3_engine.constants import SHAPES
+    from match3_engine.layouts import get_layout
+
+    rng = random.Random(0)
+    layout = get_layout("full")
+    board = create_empty_board()
+    for r in range(10):
+        for c in range(10):
+            board[r][c] = NormalCell(shape=SHAPES[(r + c) % 4], level=1)
+    board[5][5] = NormalCell(shape="circle", level=1)
+    board[5][4] = NormalCell(shape="square", level=1, frozen=True)  # 相邻冰冻格
+    state = GameState(board=board, target_shapes=[], task_target=4, total_steps=100,
+                      task_scores={s: 0 for s in SHAPES}, layout=layout,
+                      unfreeze_target=3, unfreeze_count=0)
+    res = execute_move(state, rng, {"type": "pop", "r": 5, "c": 5})
+    assert res["ok"]
+    assert res["result"]["is_pop"] is True
+    assert res["result"]["popped"] is True
+    # 捏爆不解冻相邻冰壳：相邻 (5,4) 仍冰冻
+    assert state.board[5][4] is not None and state.board[5][4].frozen
+
+
+def test_frozen_cell_not_swappable():
+    """冰冻格不可参与交换。"""
+    from match3_engine.cells import NormalCell
+    from match3_engine.board import create_empty_board
+    from match3_engine.layouts import get_layout
+
+    board = create_empty_board()
+    for r in range(10):
+        for c in range(10):
+            board[r][c] = NormalCell(shape="circle" if (r + c) % 2 else "square", level=1)
+    board[5][5] = NormalCell(shape="circle", level=1, frozen=True)
+    layout = get_layout("full")
+    swaps = get_adjacent_swaps(board, layout)
+    involves_frozen = any(
+        (s["from"]["r"] == 5 and s["from"]["c"] == 5) or (s["to"]["r"] == 5 and s["to"]["c"] == 5)
+        for s in swaps
+    )
+    assert not involves_frozen, "冰冻格不应出现在任何可交换对中"
 
 
 def test_observation_shape():
