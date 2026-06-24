@@ -31,21 +31,21 @@ python tests/test_predict_load.py               # requires a saved model
 
 # inference server (must be running for the frontend's RL button to work)
 # 2-step lookahead: score = W*r_imm + gamma*V(s'), W=8 (reward weight), top-k=12, fixed-seed sim
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model --stochastic
-python serve/predict_server.py --model runs/ppo_match3_v2/final_model --top-k 16
+python serve/predict_server.py --model runs/ppo_match3_v5/final_model
+python serve/predict_server.py --model runs/ppo_match3_v5/final_model --stochastic
+python serve/predict_server.py --model runs/ppo_match3_v5/final_model --top-k 16
 
 # frontend (serve from repo root)
 python -m http.server 8080
 
 # training (CNN extractor + 2048 n_steps + vf_coef=1.0 + ent_coef=0.01; ~2.5M steps recommended)
-python train/train_ppo.py --curriculum 3 --timesteps 2500000 --n-envs 8 --save-dir runs/ppo_match3_v2
+python train/train_ppo.py --curriculum 3 --timesteps 4000000 --n-envs 20 --save-dir runs/ppo_match3_v6
 
 # evaluation
-python train/eval.py --model runs/ppo_match3_v2/final_model --curriculum 3 --episodes 100
+python train/eval.py --model runs/ppo_match3_v5/final_model --curriculum 3 --episodes 100
 
 # tensorboard
-tensorboard --logdir runs/ppo_match3_v2/tb
+tensorboard --logdir runs/ppo_match3_v5/tb
 ```
 
 ## Critical invariant: JS/Python parity
@@ -75,7 +75,12 @@ Observation is `Dict{board: (90,10,10), global: (17,)}` — 30 channels/frame ×
 
 ## Trained model in git
 
-Older models (`ppo_match3_v1/v2/v3`) are **incompatible** — action space, observation, and rules have all changed. A full retrain targeting `runs/ppo_match3_v4/` is required. `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
+Model versions:
+- `ppo_match3_v3`: **stable**, no pop action (180-dim), recommended if pop not needed
+- `ppo_match3_v4`: transitional, pop introduced, reward scale too high
+- `ppo_match3_v5`: **current recommended**, pop + dual tasks + P1-P10 priority inference, vf_coef=2.0
+
+`ppo_match3_v1/v2` are incompatible (old action space/observation). `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
 
 ## Action space
 
