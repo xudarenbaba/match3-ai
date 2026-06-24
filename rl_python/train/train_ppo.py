@@ -69,12 +69,12 @@ def main():
         env,
         verbose=1,
         tensorboard_log=os.path.join(args.save_dir, "tb"),
-        learning_rate=3e-4,
-        n_steps=2048,    # 更长的 GAE 窗口，win_bonus 信号传播更远
-        batch_size=512,  # 配合 n_steps 增大
+        learning_rate=1e-4,  # 3e-4 → 1e-4：更小 LR，让 value head 精细收敛而不震荡
+        n_steps=2048,
+        batch_size=512,
         gamma=0.99,
-        ent_coef=0.01,   # 0.03 → 0.01：减少探索，让策略从停滞探索转向利用（ep_rew 此前不涨）
-        vf_coef=1.0,     # 0.5 → 1.0：加强 value 学习，提升 V(s') 估值精度（lookahead 依赖它）
+        ent_coef=0.005,  # 0.01 → 0.005：策略进一步减少探索，利用已有知识收敛
+        vf_coef=2.0,     # 1.0 → 2.0：大幅加强 value head 学习权重，是核心改动
         policy_kwargs=policy_kwargs,
         seed=args.seed,
     )

@@ -28,7 +28,9 @@ from sb3_contrib import MaskablePPO
 
 from env.observation import build_observation, stack_observations, BOARD_CHANNELS, ROWS, GLOBAL_DIM
 from env.reward import compute_reward
-from match3_engine.actions import build_action_mask, decode_action, POP_OFFSET
+from match3_engine.actions import (
+    build_action_mask, decode_action, POP_OFFSET, get_adjacent_swaps, encode_swap,
+)
 from match3_engine.game import snapshot_state, execute_move
 from serve.state_codec import json_to_game_state
 
@@ -36,7 +38,6 @@ MODEL: MaskablePPO | None = None
 NON_DETERMINISTIC = False
 
 # lookahead 超参数
-LOOKAHEAD_TOP_K = 12         # 第一层展开候选动作数
 LOOKAHEAD_GAMMA = 0.99       # 折扣因子（与训练保持一致）
 # 即时奖励权重：value head 估值量级远大于单步即时奖励，若直接相加会被 V 噪声淹没。
 # 放大即时奖励权重，让「4连>3连」等正确的单步信号主导决策。
@@ -44,6 +45,113 @@ LOOKAHEAD_REWARD_WEIGHT = 8.0
 # lookahead 模拟会触发 gravity 随机补充新格子。用固定种子让同一局面的评分可复现、
 # 推理结果稳定（否则同一局面多次请求可能给出不同动作）。
 LOOKAHEAD_SEED = 12345
+
+
+# ── 档位阈值常量 ─────────────────────────────────────────────────
+# 用于 _tier_of 的档位判断，避免 follow 量级主导决策导致优先级越权。
+# P8 铺垫/捏爆的增量 follow 阈值：需超过此值才算「解锁了下一步有意义消除」
+# 取值对应目标L1三连的 W*r ≈ 4.6，即捏爆/铺垫后下一步至少能达目标三连水平
+TIER_P8_INCREMENT_THRESHOLD = 4.0
+
+
+def _classify_result(result: dict, target_shapes: list) -> dict:
+    """从 execute_move 的 result 中提取档位判断所需的特征。
+
+    返回：
+        has_match     : 当步产生消除
+        task_gained   : 形状任务分增量（L2三连 → special_gained 有目标 shape）
+        max_count     : 当步最大单次消除连数
+        has_target    : 当步消除格中含目标格
+        has_powerup_gen: 当步生成了道具（4连/5连结果）
+        unfrozen      : 当步解冻格数
+    """
+    target_set = set(target_shapes)
+    merge_events = result.get("merge_events", [])
+    special_gained = result.get("special_gained", {})
+
+    has_match = bool(result.get("had_match"))
+    task_gained = sum(v for k, v in special_gained.items() if k in target_set)
+    max_count = max((e.get("count", 0) for e in merge_events), default=0)
+    has_target = any(
+        e.get("match", {}).get("shape") in target_set for e in merge_events
+    )
+    has_powerup_gen = any(
+        getattr(e.get("result_cell"), "kind", None) == "powerup"
+        for e in merge_events
+    )
+    unfrozen = int(result.get("unfrozen_count", 0))
+
+    return {
+        "has_match": has_match,
+        "task_gained": task_gained,
+        "max_count": max_count,
+        "has_target": has_target,
+        "has_powerup_gen": has_powerup_gen,
+        "unfrozen": unfrozen,
+    }
+
+
+def _tier_of(feat: dict, is_pop: bool, pop_increment: float = 0.0) -> int:
+    """根据档位特征返回优先级档位编号（1=最高，10=最低）。
+
+    优先级定义（严格不越权，存在高档则只选高档）：
+      P1  目标L2三连（直接完成形状任务分）
+      P2  目标L1五连+道具
+      P3  目标L1四连+道具
+      P4  解冻≥2格的任意消除
+      P5  解冻1格 + 目标格消除
+      P6  解冻1格的非目标格消除
+      P7  目标格L1三连（无解冻）
+      P8  铺垫/捏爆（下一步有意义消除，increment > 阈值）
+      P9  非目标格消除（无解冻）
+      P10 无意义捏爆/无消除交换
+    """
+    if is_pop:
+        # 捏爆当步无消除，价值全靠 increment
+        if pop_increment > TIER_P8_INCREMENT_THRESHOLD:
+            return 8
+        return 10
+
+    hm = feat["has_match"]
+    if not hm:
+        return 10  # 无消除交换（空挥），归 P10
+
+    tg = feat["task_gained"]
+    mc = feat["max_count"]
+    ht = feat["has_target"]
+    hp = feat["has_powerup_gen"]
+    uf = feat["unfrozen"]
+
+    # P1：形状任务分增量（L2三连触发 special_gained）
+    if tg > 0:
+        return 1
+
+    # P2：目标格五连+生成道具
+    if mc >= 5 and ht and hp:
+        return 2
+
+    # P3：目标格四连+生成道具
+    if mc == 4 and ht and hp:
+        return 3
+
+    # P4：解冻≥2格
+    if uf >= 2:
+        return 4
+
+    # P5：解冻1格 + 目标格
+    if uf == 1 and ht:
+        return 5
+
+    # P6：解冻1格（非目标格亦可）
+    if uf == 1:
+        return 6
+
+    # P7：目标格消除（无解冻，可含四连/五连但未生成道具的边缘情况）
+    if ht:
+        return 7
+
+    # P9：非目标格消除（无解冻）
+    return 9
 
 
 def _get_value(obs: dict) -> float:
@@ -64,48 +172,55 @@ def _immediate_reward(prev_state, result: dict, next_state) -> float:
     return compute_reward(prev_state, result, next_state)
 
 
-def _best_followup_value(after_state, frame_t: dict, frame_t1: dict) -> float:
-    """枚举 after_state 的所有有效交换，返回最优 1-step lookahead 值
-    `max_swap( W·r' + γ·V(s'') )`。frame_t/frame_t1 是 after_state 的前两帧历史。
+def _best_followup_pruned(after_state, cols: set, frame_t: dict, frame_t1: dict) -> float:
+    """枚举 after_state 中「涉及 cols±1 列」的有效交换，返回最优 1-step 值
+    `max_swap( W·r' + γ·V(s'') )`。返回 -inf 表示无任何消除机会。
 
-    这是 Bellman 最优 V(s') ≈ max_a' Q(s', a') 的真实估计，用于替代 value head
-    对 after_state 的直接估值——避免 value 对某些局面（尤其捏爆后局面）的高估。
-    第二层只考虑交换，不再套捏爆，避免捏爆套捏爆。
+    动作（交换/捏爆）只改变其涉及的列（及下落），新消除机会只可能在这些列附近，
+    故按列剪枝枚举，大幅减少计算量同时不漏掉被解锁的大消除/解冻机会。
     """
-    fmask = build_action_mask(after_state.board, after_state.layout)
+    near = set()
+    for c in cols:
+        near.update({c - 1, c, c + 1})
     best = -float("inf")
-    for sa in np.where(fmask > 0)[0]:
-        if sa >= POP_OFFSET:
-            continue
-        sw = decode_action(int(sa))
-        if sw is None:
+    for sw in get_adjacent_swaps(after_state.board, after_state.layout):
+        if sw["from"]["c"] not in near and sw["to"]["c"] not in near:
             continue
         sr = random.Random(LOOKAHEAD_SEED)
         ns = snapshot_state(after_state)
         ns.last_action = after_state.last_action
-        er = execute_move(ns, sr, sw)
-        if not er["ok"]:
-            continue
-        er["result"]["action_index"] = int(sa)
+        er = execute_move(ns, sr, {"type": "swap", "from": sw["from"], "to": sw["to"]})
+        if not er["ok"] or not er["result"].get("had_match"):
+            continue  # 只看能形成消除的交换
+        er["result"]["action_index"] = encode_swap(sw["from"], sw["to"])
         r = _immediate_reward(after_state, er["result"], ns)
         v = _get_value(stack_observations([frame_t, frame_t1, build_observation(ns)]))
         cand = LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * v
         if cand > best:
             best = cand
-    if best == -float("inf"):
-        # 无任何有效交换：退化为 after_state 自身 value
-        best = _get_value(stack_observations([frame_t, frame_t1, frame_t1]))
     return best
 
 
-def _score_action(state, prev_frames: list, f_curr: dict, move: dict, action_idx: int) -> float:
-    """统一的 2-step 评分（交换与捏爆对称）：
+def _affected_cols(move: dict) -> set:
+    """动作影响的列：交换涉及两列，捏爆涉及一列。"""
+    if move["type"] == "pop":
+        return {move["c"]}
+    return {move["from"]["c"], move["to"]["c"]}
 
-        score = W·r(s,a) + γ · max_a'( W·r(s',a') + γ·V(s'') )
 
-    交换与捏爆都展开下一层，用同一基准比较。捏爆无即时收益（r 含 pop_cost 为负），
-    只有当「捏爆后最优下一步」明显优于「直接交换及其后续」时才会胜出——从而实现
-    「捏爆必须为下一步创造大消除/道具机会」的语义，杜绝随意捏爆。
+def _score_action(
+    state, prev_frames: list, f_curr: dict, move: dict, action_idx: int,
+    pop_baseline: float = -float("inf"),
+) -> float:
+    """统一的对称 2-step 评分（交换与捏爆同一基准）。
+
+    对捏爆候选：只计算捏爆「真正新解锁」的增量价值。
+        increment = max(0, follow_after - pop_baseline)
+    当捏爆没有改善局面时（follow_after ≤ baseline），score ≈ W·r_pop（纯负），
+    必然输给任何有正即时收益的交换，杜绝「蹭本来就有的机会」。
+
+    pop_baseline：捏爆前 col±1 范围内本来就有的最优后续价值，由 lookahead_select
+    一次性预算并传入，避免每个捏爆候选重复计算（性能优化）。
     """
     sim_rng = random.Random(LOOKAHEAD_SEED)
     ss = snapshot_state(state)
@@ -114,55 +229,135 @@ def _score_action(state, prev_frames: list, f_curr: dict, move: dict, action_idx
     if not er["ok"]:
         return -float("inf")
     er["result"]["action_index"] = action_idx
-    r = _immediate_reward(state, er["result"], ss)  # 交换得分 或 捏爆成本(负)
+    r = _immediate_reward(state, er["result"], ss)
     f_next = build_observation(ss)
-    v_la = _best_followup_value(ss, f_curr, f_next)
-    return LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * v_la
+    cols = _affected_cols(move)
+    follow_after = _best_followup_pruned(ss, cols, f_curr, f_next)
+
+    if move["type"] == "pop":
+        if pop_baseline == -float("inf"):
+            # 原局面该列无消除机会：捏爆可用 follow_after 完整计分
+            increment = follow_after if follow_after != -float("inf") else 0.0
+        else:
+            increment = max(0.0, follow_after - pop_baseline) if follow_after != -float("inf") else 0.0
+        return LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * increment
+    else:
+        if follow_after == -float("inf"):
+            v = _get_value(stack_observations(prev_frames + [f_next]))
+            return LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * v
+        return LOOKAHEAD_REWARD_WEIGHT * r + LOOKAHEAD_GAMMA * follow_after
 
 
 def lookahead_select(state, obs: dict, mask: np.ndarray) -> int:
-    """
-    统一 2-step lookahead 动作选择：
-      所有候选（交换/捏爆）均评估 `W·r + γ·max_followup`，对称公平。
-      捏爆只有在「捏爆后下一步真能大消除/触发道具」时才会胜出。
-    """
-    # ── 拿 action distribution logits ──────────────────────────────
-    board_t = torch.tensor(obs["board"][None], dtype=torch.float32)
-    global_t = torch.tensor(obs["global"][None], dtype=torch.float32)
-    obs_tensor = {
-        "board": board_t.to(MODEL.device),
-        "global": global_t.to(MODEL.device),
-    }
-    mask_np = mask.astype(bool)[None]
+    """硬档位 + follow 精细化的 lookahead 动作选择。
 
-    with torch.no_grad():
-        dist = MODEL.policy.get_distribution(obs_tensor, action_masks=mask_np)
-        logits = dist.distribution.logits.squeeze(0).cpu().numpy()
+    执行流程：
+      1. 模拟所有有效动作，提取即时结果特征（不含 follow）
+      2. 按 P1-P10 档位分组
+      3. 只在最高档（编号最小）内，计算 W·r + γ·follow 精细排序，选最优
+      4. 严格不越权：高档候选存在时，低档候选绝对不参与竞争
 
+    捏爆专项：
+      - 当步无消除，tier 由 pop_increment（follow_after - baseline）决定
+      - increment > 阈值 → P8（铺垫），否则 → P10
+      - P8 内按 increment 大小排序，不引入 follow 的 value 噪声
+    """
     valid_indices = np.where(mask > 0)[0]
     if len(valid_indices) == 0:
         action, _ = MODEL.predict(obs, action_masks=mask.astype(bool), deterministic=True)
         return int(action)
 
-    valid_logits = logits[valid_indices]
-    k = min(LOOKAHEAD_TOP_K, len(valid_indices))
-    top_local = np.argsort(valid_logits)[::-1][:k]
-    top_k_actions = valid_indices[top_local]
-
     prev_frames = last_two_frames(obs)  # [f_{t-1}, f_t]
     f_curr = prev_frames[1]             # f_t
 
-    best_action = int(top_k_actions[0])
-    best_score = -float("inf")
+    # ── 预计算捏爆基线（每列只算一次）───────────────────────────────
+    pop_baselines: dict[int, float] = {}
+    for action_idx in valid_indices:
+        if action_idx < POP_OFFSET:
+            continue
+        mv = decode_action(int(action_idx))
+        if mv is None:
+            continue
+        c = mv["c"]
+        if c not in pop_baselines:
+            pop_baselines[c] = _best_followup_pruned(state, {c}, f_curr, f_curr)
 
-    for action_idx in top_k_actions:
+    # ── 第一遍：模拟所有动作，取即时结果，确定档位 ──────────────────
+    candidates: list[dict] = []  # {action_idx, move, tier, result, r_imm, increment}
+
+    for action_idx in valid_indices:
         move = decode_action(int(action_idx))
         if move is None:
             continue
-        total = _score_action(state, prev_frames, f_curr, move, int(action_idx))
-        if total > best_score:
-            best_score = total
-            best_action = int(action_idx)
+
+        sim_rng = random.Random(LOOKAHEAD_SEED)
+        ss = snapshot_state(state)
+        ss.last_action = state.last_action
+        er = execute_move(ss, sim_rng, move)
+        if not er["ok"]:
+            continue
+        er["result"]["action_index"] = int(action_idx)
+        r_imm = _immediate_reward(state, er["result"], ss)
+        feat = _classify_result(er["result"], state.target_shapes)
+        is_pop = move["type"] == "pop"
+
+        # 捏爆需要算 increment
+        pop_increment = 0.0
+        if is_pop:
+            c = move["c"]
+            baseline = pop_baselines.get(c, -float("inf"))
+            # follow_after：捏爆后该列消除机会（只算能消除的）
+            f_next = build_observation(ss)
+            follow_after = _best_followup_pruned(ss, {c}, f_curr, f_next)
+            if baseline == -float("inf"):
+                pop_increment = follow_after if follow_after != -float("inf") else 0.0
+            else:
+                pop_increment = max(0.0, follow_after - baseline) if follow_after != -float("inf") else 0.0
+
+        tier = _tier_of(feat, is_pop, pop_increment)
+        candidates.append({
+            "action_idx": int(action_idx),
+            "move": move,
+            "tier": tier,
+            "result_state": ss,   # 已模拟后的状态，供 follow 计算复用
+            "r_imm": r_imm,
+            "feat": feat,
+            "is_pop": is_pop,
+            "pop_increment": pop_increment,
+        })
+
+    if not candidates:
+        return int(valid_indices[0])
+
+    # ── 第二遍：找最高档，只在该档内精细排序 ────────────────────────
+    best_tier = min(c["tier"] for c in candidates)
+    top_candidates = [c for c in candidates if c["tier"] == best_tier]
+
+    if len(top_candidates) == 1:
+        return top_candidates[0]["action_idx"]
+
+    # 同档内精细排序
+    best_action = top_candidates[0]["action_idx"]
+    best_score = -float("inf")
+
+    for cand in top_candidates:
+        if cand["is_pop"]:
+            # P8 捏爆：按 increment 大小排，不引入 follow value 噪声
+            score = cand["pop_increment"]
+        else:
+            # 交换类：W·r_imm + γ·follow
+            cols = _affected_cols(cand["move"])
+            f_next = build_observation(cand["result_state"])
+            follow = _best_followup_pruned(cand["result_state"], cols, f_curr, f_next)
+            if follow == -float("inf"):
+                v = _get_value(stack_observations(prev_frames + [f_next]))
+                score = LOOKAHEAD_REWARD_WEIGHT * cand["r_imm"] + LOOKAHEAD_GAMMA * v
+            else:
+                score = LOOKAHEAD_REWARD_WEIGHT * cand["r_imm"] + LOOKAHEAD_GAMMA * follow
+
+        if score > best_score:
+            best_score = score
+            best_action = cand["action_idx"]
 
     return best_action
 
@@ -276,7 +471,7 @@ class PredictHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global MODEL, NON_DETERMINISTIC, LOOKAHEAD_TOP_K
+    global MODEL, NON_DETERMINISTIC
     parser = argparse.ArgumentParser(description="RL 推理服务")
     parser.add_argument(
         "--model",
@@ -291,15 +486,7 @@ def main() -> None:
         action="store_true",
         help="启用非确定性采样推理，降低重复动作概率",
     )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=LOOKAHEAD_TOP_K,
-        help=f"lookahead 展开的候选动作数（默认 {LOOKAHEAD_TOP_K}）",
-    )
     args = parser.parse_args()
-
-    LOOKAHEAD_TOP_K = args.top_k
 
     model_path = args.model
     if not model_path.endswith(".zip"):
@@ -313,7 +500,7 @@ def main() -> None:
     MODEL = MaskablePPO.load(model_path)
     NON_DETERMINISTIC = bool(args.stochastic)
     print(f"已加载模型: {model_path}")
-    print(f"推理模式: 2-step lookahead (top-k={LOOKAHEAD_TOP_K}, gamma={LOOKAHEAD_GAMMA})")
+    print(f"推理模式: 全评估对称 2-step lookahead (gamma={LOOKAHEAD_GAMMA}, W={LOOKAHEAD_REWARD_WEIGHT})")
     server = HTTPServer((args.host, args.port), PredictHandler)
     print(f"推理服务: http://{args.host}:{args.port}")
     print("  GET  /health")
