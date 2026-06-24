@@ -31,9 +31,9 @@ python tests/test_predict_load.py               # requires a saved model
 
 # inference server (must be running for the frontend's RL button to work)
 # 2-step lookahead: score = W*r_imm + gamma*V(s'), W=8 (reward weight), top-k=12, fixed-seed sim
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model --stochastic
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model --top-k 16
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model --stochastic
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model --top-k 16
 
 # frontend (serve from repo root)
 python -m http.server 8080
@@ -42,10 +42,10 @@ python -m http.server 8080
 python train/train_ppo.py --curriculum 3 --timesteps 4000000 --n-envs 20 --save-dir runs/ppo_match3_v6
 
 # evaluation
-python train/eval.py --model runs/ppo_match3_v5/final_model --curriculum 3 --episodes 100
+python train/eval.py --model runs/ppo_match3_v6/final_model --curriculum 3 --episodes 100
 
 # tensorboard
-tensorboard --logdir runs/ppo_match3_v5/tb
+tensorboard --logdir runs/ppo_match3_v6/tb
 ```
 
 ## Critical invariant: JS/Python parity
@@ -77,8 +77,8 @@ Observation is `Dict{board: (90,10,10), global: (17,)}` — 30 channels/frame ×
 
 Model versions:
 - `ppo_match3_v3`: **stable**, no pop action (180-dim), recommended if pop not needed
-- `ppo_match3_v4`: transitional, pop introduced, reward scale too high
-- `ppo_match3_v5`: **current recommended**, pop + dual tasks + P1-P10 priority inference, vf_coef=2.0
+- `ppo_match3_v4/v5`: transitional, pop introduced, reward scale and params tuned iteratively
+- `ppo_match3_v6`: **current recommended**, pop + dual tasks + P1-P10 priority inference, vf_coef=2.0, stable performance
 
 `ppo_match3_v1/v2` are incompatible (old action space/observation). `checkpoints/`, `tb/`, and `eval/` subdirs are gitignored.
 

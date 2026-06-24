@@ -79,7 +79,7 @@ runs/<实验名>/
 查看训练曲线：
 
 ```bash
-tensorboard --logdir runs/ppo_match3_v5/tb  # 查看 v5；下一版替换为 v6
+tensorboard --logdir runs/ppo_match3_v6/tb  # 查看 v5；下一版替换为 v6
 ```
 
 #### 模型版本一览
@@ -89,11 +89,12 @@ tensorboard --logdir runs/ppo_match3_v5/tb  # 查看 v5；下一版替换为 v6
 | v1-v2 | 180 | 无 | 早期版本，规则/观测已变 | 已过时，不兼容 |
 | **v3** | 180 | **无** | **效果稳定**，无捏爆操作，适合纯形状任务 | 可用 |
 | v4 | 280 | 有 | 首次引入捏爆，奖励尺度偏高，value 收敛较差 | 过渡版 |
-| **v5** | 280 | **有** | **当前推荐**，捏爆+双任务，P1-P10 优先级推理，初步效果符合要求 | 推荐 |
+| v5 | 280 | 有 | 捏爆+双任务，P1-P10 优先级推理，初步效果符合要求 | 可用 |
+| **v6** | 280 | **有** | **当前推荐**，捏爆+双任务+P1-P10优先级推理，效果趋于稳定 | 推荐 |
 
 > **选哪个版本？**
 > - 追求稳定无捏爆效果 → **v3**（`runs/ppo_match3_v3/final_model`）
-> - 使用捏爆和双任务（冰冻解锁）→ **v5**（`runs/ppo_match3_v5/final_model`）
+> - 使用捏爆和双任务（冰冻解锁，效果趋于稳定）→ **v6**（`runs/ppo_match3_v6/final_model`）
 
 ### 3) 启动推理服务（必须先启动）
 
@@ -102,31 +103,31 @@ tensorboard --logdir runs/ppo_match3_v5/tb  # 查看 v5；下一版替换为 v6
 ```bash
 conda activate rlgame
 cd rl_python
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model
 ```
 
 使用评估最优模型：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v5/best/best_model
+python serve/predict_server.py --model runs/ppo_match3_v6/best/best_model
 ```
 
 非确定性模式（更不容易重复动作，推荐对局时使用）：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model --stochastic
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model --stochastic
 ```
 
 调节 2-step lookahead 候选数（默认 12，越大越精确但略慢）：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model --top-k 16
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model --top-k 16
 ```
 
 自定义端口：
 
 ```bash
-python serve/predict_server.py --model runs/ppo_match3_v5/final_model --host 127.0.0.1 --port 8765
+python serve/predict_server.py --model runs/ppo_match3_v6/final_model --host 127.0.0.1 --port 8765
 ```
 
 看到 `推理服务: http://127.0.0.1:8765` 表示启动成功。
@@ -319,8 +320,8 @@ match3-ai/
    └─ runs/                           # 训练产物（部分已提交 git，见下方说明）
        ├─ ppo_match3_v1~v2/            # 历史模型（动作空间/观测/规则均已变化，已过时）
        ├─ ppo_match3_v3/               # 稳定版：无捏爆操作，效果稳定（180动作空间）
-       ├─ ppo_match3_v4/               # 过渡版：首次引入捏爆，奖励尺度较高
-       └─ ppo_match3_v5/               # 当前推荐：捏爆+双任务+P1-P10优先级推理，初步效果符合要求
+       ├─ ppo_match3_v4~v5/            # 过渡版：捏爆引入阶段，奖励/参数逐步调优
+       └─ ppo_match3_v6/               # 当前推荐：捏爆+双任务+P1-P10优先级推理，效果趋于稳定
 ```
 
 ## 五、训练与推理链路
@@ -413,7 +414,7 @@ match3-ai/
 
 ```bash
 # 在 rl_python/ 目录下运行
-python train/eval.py --model runs/ppo_match3_v5/final_model --curriculum 3 --episodes 100
+python train/eval.py --model runs/ppo_match3_v6/final_model --curriculum 3 --episodes 100
 
 # 随机策略基线（不传 --model）
 python train/eval.py --curriculum 3 --episodes 100
